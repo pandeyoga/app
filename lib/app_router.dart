@@ -27,6 +27,7 @@ import 'features/admin_central/presentation/admin_partner_profile_screen.dart';
 import 'features/admin_central/presentation/admin_partner_assessment_screen.dart';
 import 'features/partner_dashboard/presentation/partner_dashboard_desktop.dart';
 import 'features/partner_dashboard/presentation/partner_registration_screen.dart';
+import 'features/partner_dashboard/presentation/partner_application_status_screen.dart';
 import 'features/partner_dashboard/presentation/schedule_config_screen.dart';
 import 'features/partner_dashboard/presentation/panel_duration_config_screen.dart';
 import 'features/partner_dashboard/settings/presentation/partner_settings_screen.dart';
@@ -92,7 +93,7 @@ String? _cachedReturnTo;
 const _allowedReturnPaths = {
   '/estimator', '/booking', '/tracking', '/login', '/register',
   '/faq', '/profile', '/notifications', '/partner-dashboard',
-  '/admin', '/',
+  '/admin', '/', '/partner/application-status',
 };
 
 // INT-10 FIX: Sanitize returnTo to prevent open redirect attacks.
@@ -289,6 +290,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/partner/register',
         builder: (context, state) => const PartnerRegistrationScreen(),
+      ),
+      GoRoute(
+        path: '/partner/application-status',
+        builder: (context, state) => const PartnerApplicationStatusScreen(),
       ),
       GoRoute(
         path: '/estimator',
