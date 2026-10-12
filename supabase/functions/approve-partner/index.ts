@@ -227,24 +227,17 @@ serve(async (req) => {
     const waMsg = `Selamat! 🎉\n\nPendaftaran bengkel *${appData.shop_name}* sebagai mitra Revive telah *disetujui*.\n\nSilakan cek email Anda untuk link login ke dashboard mitra.\n\nSalam,\nTim Revive`
     const emailMsg = `Selamat,\n\nPendaftaran bengkel ${appData.shop_name} sebagai mitra Revive telah disetujui.\n\nSilakan cek email ini untuk link login ke dashboard mitra Anda.\n\nSalam,\nTim Revive`
 
-    if (appData.phone) {
-      await supabaseAdmin.rpc('notify', {
-        p_user_id: null, p_job_id: null,
-        p_kind: 'partner_approved', p_channel: 'whatsapp',
-        p_to_address: appData.phone,
-        p_title: 'Pendaftaran Mitra Revive Disetujui',
-        p_body: waMsg, p_payload: {}, p_purpose: 'transactional',
+    const enqueue = async (channel: 'whatsapp' | 'email', toAddress: string, title: string, body: string) => {
+      const { error } = await supabaseAdmin.from('notification_outbox').insert({
+        user_id: null, job_id: null, kind: 'partner_approved',
+        channel, to_address: toAddress, title, body,
+        payload: {}, status: 'pending', purpose: 'transactional',
       })
+      if (error) console.error(`[approve enqueue ${channel}]`, error.message)
     }
-    if (appData.email) {
-      await supabaseAdmin.rpc('notify', {
-        p_user_id: null, p_job_id: null,
-        p_kind: 'partner_approved', p_channel: 'email',
-        p_to_address: appData.email,
-        p_title: 'Pendaftaran Mitra Revive Disetujui',
-        p_body: emailMsg, p_payload: {}, p_purpose: 'transactional',
-      })
-    }
+
+    if (appData.phone) await enqueue('whatsapp', appData.phone, 'Pendaftaran Mitra Revive Disetujui', waMsg)
+    if (appData.email) await enqueue('email', appData.email, 'Pendaftaran Mitra Revive Disetujui', emailMsg)
 
     return new Response(
       JSON.stringify({

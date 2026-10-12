@@ -909,6 +909,27 @@ class _ApplicationDetailPanelState
                 const SizedBox(width: 8),
                 _Badge('Pendaftaran Baru', _amber.withValues(alpha: 0.12), _amber),
               ]),
+              if (status == 'pending_review' && app['revision_notes'] != null) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: _blue.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: _blue.withValues(alpha: 0.3)),
+                  ),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Icon(Icons.edit_note, size: 16, color: _blue),
+                    const SizedBox(width: 8),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const Text('Catatan Revisi', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: _blue)),
+                      const SizedBox(height: 2),
+                      Text(app['revision_notes'].toString(),
+                          style: TextStyle(fontSize: 12, color: _blue.withValues(alpha: 0.9))),
+                    ])),
+                  ]),
+                ),
+              ],
             ])),
             // Action buttons
             _isSaving
@@ -2111,10 +2132,21 @@ class _StatusChip extends StatelessWidget {
 
   Color get _color {
     switch (status) {
-      case 'approved': return _green;
-      case 'rejected': return _red;
-      case 'pending':  return _amber;
-      default:         return _blue;
+      case 'approved':       return _green;
+      case 'rejected':       return _red;
+      case 'pending':        return _amber;
+      case 'pending_review': return _blue;
+      default:               return _blue;
+    }
+  }
+
+  String get _label {
+    switch (status) {
+      case 'approved':       return 'Approved';
+      case 'rejected':       return 'Rejected';
+      case 'pending':        return 'Pending';
+      case 'pending_review': return 'Perlu Revisi';
+      default:               return status;
     }
   }
 
@@ -2126,7 +2158,7 @@ class _StatusChip extends StatelessWidget {
           color: _color.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(12)),
       child: Text(
-        status[0].toUpperCase() + status.substring(1),
+        _label,
         style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: _color),
       ),
     );
