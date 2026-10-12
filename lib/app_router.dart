@@ -135,9 +135,30 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       final isLoggingIn = state.uri.path == '/login';
       final path = state.uri.path;
 
+      // Implicit flow: magic link lands at / with #access_token=...&type=magiclink
+      // Exchange the token and route to partner status page.
+      if (session == null) {
+        final fragment = Uri.base.fragment;
+        if (fragment.contains('access_token=') && fragment.contains('type=magiclink')) {
+          try {
+            final params = Uri.splitQueryString(fragment);
+            final accessToken = params['access_token'] ?? '';
+            final refreshToken = params['refresh_token'] ?? '';
+            if (accessToken.isNotEmpty) {
+              final refresh = params['refresh_token'] ?? '';
+              await Supabase.instance.client.auth.setSession(accessToken);
+              if (refresh.isNotEmpty) {
+                await Supabase.instance.client.auth.refreshSession();
+              }
+            }
+          } catch (_) {}
+          return '/partner/application-status';
+        }
+      }
+
       // Unauthenticated Guard
       if (session == null) {
-        final publicPaths = ['/', '/estimator', '/diagram-test', '/auth/callback', '/partner/register', '/faq', '/about', '/privacy'];
+        final publicPaths = ['/', '/estimator', '/diagram-test', '/auth/callback', '/partner/register', '/faq', '/about', '/privacy', '/partner/application-status'];
         if (publicPaths.contains(path) || path.startsWith('/auth/')) return null;
         if (!isLoggingIn) {
           // PERF-10/SEC-16 fix: in-memory only, no SharedPreferences I/O
@@ -155,7 +176,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       // cost them the estimate (it rides in customer_intakeProvider, which is
       // backed by SharedPreferences and survives the round trip).
       if (GuestSession.isGuest(session.user)) {
-        final publicPaths = ['/', '/estimator', '/diagram-test', '/auth/callback', '/partner/register', '/faq', '/about', '/privacy'];
+        final publicPaths = ['/', '/estimator', '/diagram-test', '/auth/callback', '/partner/register', '/faq', '/about', '/privacy', '/partner/application-status'];
         if (publicPaths.contains(path) || path.startsWith('/auth/') || isLoggingIn) {
           return null;
         }
