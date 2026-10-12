@@ -1019,4 +1019,213 @@ class AppLId extends AppL {
 
   @override
   String get navLogOut => 'Keluar';
+
+  @override
+  String get partnerRegBreadcrumb => 'Pendaftaran Mitra';
+
+  @override
+  String get partnerRegTitle => 'Pendaftaran Bengkel Mitra';
+
+  @override
+  String get partnerRegSubtitle =>
+      'Bergabung dengan jaringan perbaikan bodi AI Revive';
+
+  @override
+  String get partnerRegStep1 => 'Identitas';
+
+  @override
+  String get partnerRegStep1Sub => 'Entitas hukum, kontak, dan tier';
+
+  @override
+  String get partnerRegStep2 => 'Foto';
+
+  @override
+  String get partnerRegStep2Sub => 'Foto audit fasilitas — 4 slot';
+
+  @override
+  String get partnerRegStep3 => 'Dokumen';
+
+  @override
+  String get partnerRegStep3Sub => 'Dokumen legal & pajak — terenkripsi';
+
+  @override
+  String get partnerRegStep4 => 'Lokasi';
+
+  @override
+  String get partnerRegStep4Sub => 'Koordinat bengkel dan radius layanan';
+
+  @override
+  String get partnerRegStep5 => 'Bank & Tanda Tangan';
+
+  @override
+  String get partnerRegStep5Sub => 'Rekening pembayaran dan persetujuan';
+
+  @override
+  String get partnerRegEntityName => 'Nama Entitas Hukum (PT / CV / Firma)';
+
+  @override
+  String get partnerRegBrandName => 'Nama Merek / Workshop';
+
+  @override
+  String get partnerRegPic => 'PIC / Manajer Bengkel';
+
+  @override
+  String get partnerRegLegalAddress => 'Alamat Bisnis Resmi';
+
+  @override
+  String get partnerRegEmail => 'Email Bisnis Resmi';
+
+  @override
+  String get partnerRegEmailRequired => 'Email wajib diisi';
+
+  @override
+  String get partnerRegEmailInvalid => 'Alamat email tidak valid';
+
+  @override
+  String get partnerRegEmailSent =>
+      'Link verifikasi dikirim — cek kotak masuk dan klik link-nya.';
+
+  @override
+  String get partnerRegPhone => 'Nomor WhatsApp Langsung';
+
+  @override
+  String get partnerRegPhoneVerified => 'Nomor WhatsApp terverifikasi';
+
+  @override
+  String get partnerRegTier => 'Tier Operasional';
+
+  @override
+  String get partnerRegPaint => 'Merek Cat Bersertifikat';
+
+  @override
+  String get partnerTier1Name => 'Fasilitas Spray Unggulan';
+
+  @override
+  String get partnerTier1Desc => 'Spray booth down-draft, dry sanding';
+
+  @override
+  String get partnerTier2Name => 'Mitra Resmi';
+
+  @override
+  String get partnerTier2Desc => 'Booth standar, spesifikasi OEM';
+
+  @override
+  String get partnerTier3Name => 'Pusat PDR Express';
+
+  @override
+  String get partnerTier3Desc => 'Paintless dent & perbaikan spot';
+
+  @override
+  String get partnerRegSendOtp => 'Kirim OTP';
+
+  @override
+  String get partnerRegVerify => 'Verifikasi';
+
+  @override
+  String get partnerRegVerified => 'Terverifikasi ✓';
+
+  @override
+  String get partnerRegOtpCode => 'Masukkan OTP 6 digit';
+
+  @override
+  String get partnerRegPhotosUploaded => 'foto diunggah';
+
+  @override
+  String get partnerRegPhotosHint =>
+      'Minimal 1 foto wajib. Maks 4. Menunjukkan kondisi bengkel ke reviewer Revive.';
+
+  @override
+  String get partnerRegDocNib => 'Nomor Induk Berusaha';
+
+  @override
+  String get partnerRegDocNpwp => 'NPWP Badan Usaha Perusahaan';
+
+  @override
+  String get partnerRegDocSiup => 'Izin Operasional Bengkel (SIUP)';
+
+  @override
+  String get partnerRegDocKtp => 'KTP Direktur / Penanggung Jawab Teknis';
+
+  @override
+  String get partnerRegDocEncrypted =>
+      'Semua dokumen dienkripsi dan hanya dapat diakses oleh tim verifikasi Revive.';
+
+  @override
+  String get partnerRegSelectFile => 'Pilih File';
+
+  @override
+  String get partnerRegReplace => 'Ganti';
+
+  @override
+  String get partnerRegSameAsLegal => 'Alamat bengkel sama dengan alamat hukum';
+
+  @override
+  String get partnerRegWorkshopAddress => 'Alamat Fisik Bengkel';
+
+  @override
+  String get partnerRegMapPin => 'Pin Peta Bengkel';
+
+  @override
+  String get partnerRegLocateMe => 'Gunakan GPS';
+
+  @override
+  String get partnerRegMapHint =>
+      'Ketuk peta untuk pasang pin, atau gunakan tombol GPS di atas.';
+
+  @override
+  String get partnerRegRadius => 'Radius Layanan Derek & Jemput';
+
+  @override
+  String get partnerRegBankName => 'Nama Bank';
+
+  @override
+  String get partnerRegBankAccount => 'Nomor Rekening';
+
+  @override
+  String get partnerRegBankHolder => 'Nama Pemilik Rekening';
+
+  @override
+  String get partnerRegConsent =>
+      'Saya menyatakan berdasarkan Hukum Dagang Indonesia (UU PT & Perbengkelan) bahwa semua informasi yang dikirimkan adalah autentik dan sesuai dengan SLA Jaringan Revive.';
+
+  @override
+  String get partnerRegSubmit => 'Kirim Pendaftaran';
+
+  @override
+  String get partnerRegSubmitting => 'Mengirim…';
+
+  @override
+  String get partnerRegSubmitFailed => 'Pengiriman gagal';
+
+  @override
+  String get partnerRegBack => 'Kembali';
+
+  @override
+  String get partnerRegNext => 'Lanjut';
+
+  @override
+  String get partnerRegSuccessTitle => 'Pendaftaran Terkirim';
+
+  @override
+  String get partnerRegSuccessBody =>
+      'Pendaftaran Anda telah dikirim ke tim verifikasi Revive. Anda akan diberitahu melalui WhatsApp dan email mengenai hasilnya.';
+
+  @override
+  String get partnerRegSuccessPhotos => 'foto fasilitas';
+
+  @override
+  String get partnerRegSuccessDocs => 'dokumen legal';
+
+  @override
+  String get partnerRegGoHome => 'Kembali ke Beranda';
+
+  @override
+  String get partnerNotifApproved =>
+      'Selamat! Pendaftaran bengkel Anda disetujui. Login menggunakan email ini.';
+
+  @override
+  String get partnerNotifRejected => 'Pendaftaran bengkel Anda ditolak.';
+
+  @override
+  String get partnerNotifRevision => 'Pendaftaran Anda memerlukan perbaikan.';
 }

@@ -1015,4 +1015,213 @@ class AppLEn extends AppL {
 
   @override
   String get navLogOut => 'Log Out';
+
+  @override
+  String get partnerRegBreadcrumb => 'Partner Onboarding';
+
+  @override
+  String get partnerRegTitle => 'Workshop Partner Registration';
+
+  @override
+  String get partnerRegSubtitle =>
+      'Join Revive\'s AI-driven collision repair network';
+
+  @override
+  String get partnerRegStep1 => 'Identity';
+
+  @override
+  String get partnerRegStep1Sub => 'Legal entity, contact, and tier';
+
+  @override
+  String get partnerRegStep2 => 'Photos';
+
+  @override
+  String get partnerRegStep2Sub => 'Facility audit photos — 4 slots';
+
+  @override
+  String get partnerRegStep3 => 'Documents';
+
+  @override
+  String get partnerRegStep3Sub => 'Legal & tax documents — encrypted';
+
+  @override
+  String get partnerRegStep4 => 'Location';
+
+  @override
+  String get partnerRegStep4Sub => 'Workshop coordinates and service radius';
+
+  @override
+  String get partnerRegStep5 => 'Bank & Sign';
+
+  @override
+  String get partnerRegStep5Sub => 'Payout account and consent';
+
+  @override
+  String get partnerRegEntityName => 'Legal Entity Name (PT / CV / Firma)';
+
+  @override
+  String get partnerRegBrandName => 'Trade / Workshop Brand Name';
+
+  @override
+  String get partnerRegPic => 'PIC / Workshop General Manager';
+
+  @override
+  String get partnerRegLegalAddress => 'Legal Business Address';
+
+  @override
+  String get partnerRegEmail => 'Official Business Email';
+
+  @override
+  String get partnerRegEmailRequired => 'Email is required';
+
+  @override
+  String get partnerRegEmailInvalid => 'Invalid email address';
+
+  @override
+  String get partnerRegEmailSent =>
+      'Verification link sent — check your inbox and click the link.';
+
+  @override
+  String get partnerRegPhone => 'Direct WhatsApp Number';
+
+  @override
+  String get partnerRegPhoneVerified => 'WhatsApp number verified';
+
+  @override
+  String get partnerRegTier => 'Operational Tier';
+
+  @override
+  String get partnerRegPaint => 'Certified Paint Brand';
+
+  @override
+  String get partnerTier1Name => 'Flagship Spray Facility';
+
+  @override
+  String get partnerTier1Desc => 'Down-draft booth, dry sanding';
+
+  @override
+  String get partnerTier2Name => 'Authorized Partner';
+
+  @override
+  String get partnerTier2Desc => 'Standard booth, OEM refinish specs';
+
+  @override
+  String get partnerTier3Name => 'Express PDR Center';
+
+  @override
+  String get partnerTier3Desc => 'Paintless dent & spot repair';
+
+  @override
+  String get partnerRegSendOtp => 'Send OTP';
+
+  @override
+  String get partnerRegVerify => 'Verify';
+
+  @override
+  String get partnerRegVerified => 'Verified ✓';
+
+  @override
+  String get partnerRegOtpCode => 'Enter 6-digit OTP';
+
+  @override
+  String get partnerRegPhotosUploaded => 'photos uploaded';
+
+  @override
+  String get partnerRegPhotosHint =>
+      'At least 1 photo required. Max 4. Shows workshop condition to Revive reviewers.';
+
+  @override
+  String get partnerRegDocNib => 'Nomor Induk Berusaha';
+
+  @override
+  String get partnerRegDocNpwp => 'NPWP Badan Usaha Perusahaan';
+
+  @override
+  String get partnerRegDocSiup => 'Izin Operasional Bengkel (SIUP)';
+
+  @override
+  String get partnerRegDocKtp => 'KTP Direktur / Penanggung Jawab Teknis';
+
+  @override
+  String get partnerRegDocEncrypted =>
+      'All documents are encrypted and only accessible to Revive\'s verification team.';
+
+  @override
+  String get partnerRegSelectFile => 'Select File';
+
+  @override
+  String get partnerRegReplace => 'Replace';
+
+  @override
+  String get partnerRegSameAsLegal => 'Workshop address same as legal address';
+
+  @override
+  String get partnerRegWorkshopAddress => 'Workshop Physical Address';
+
+  @override
+  String get partnerRegMapPin => 'Workshop Map Pin';
+
+  @override
+  String get partnerRegLocateMe => 'Use GPS';
+
+  @override
+  String get partnerRegMapHint =>
+      'Tap the map to set pin, or use GPS button above.';
+
+  @override
+  String get partnerRegRadius => 'Towing & Pick-up Service Radius';
+
+  @override
+  String get partnerRegBankName => 'Bank Name';
+
+  @override
+  String get partnerRegBankAccount => 'Account Number';
+
+  @override
+  String get partnerRegBankHolder => 'Account Holder Name';
+
+  @override
+  String get partnerRegConsent =>
+      'I certify under Indonesian Commercial Law (UU PT & Perbengkelan) that all submitted information is authentic and conforms to the Revive Collision Network Operating SLA.';
+
+  @override
+  String get partnerRegSubmit => 'Submit Application';
+
+  @override
+  String get partnerRegSubmitting => 'Submitting…';
+
+  @override
+  String get partnerRegSubmitFailed => 'Submission failed';
+
+  @override
+  String get partnerRegBack => 'Back';
+
+  @override
+  String get partnerRegNext => 'Next';
+
+  @override
+  String get partnerRegSuccessTitle => 'Application Submitted';
+
+  @override
+  String get partnerRegSuccessBody =>
+      'Your application has been sent to the Revive verification team. You will be notified via WhatsApp and email on the outcome.';
+
+  @override
+  String get partnerRegSuccessPhotos => 'facility photos';
+
+  @override
+  String get partnerRegSuccessDocs => 'legal documents';
+
+  @override
+  String get partnerRegGoHome => 'Back to Home';
+
+  @override
+  String get partnerNotifApproved =>
+      'Selamat! Pendaftaran bengkel Anda disetujui. Login menggunakan email ini.';
+
+  @override
+  String get partnerNotifRejected => 'Pendaftaran bengkel Anda ditolak.';
+
+  @override
+  String get partnerNotifRevision => 'Pendaftaran Anda memerlukan perbaikan.';
 }

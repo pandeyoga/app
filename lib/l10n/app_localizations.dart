@@ -2040,6 +2040,408 @@ abstract class AppL {
   /// In en, this message translates to:
   /// **'Log Out'**
   String get navLogOut;
+
+  /// No description provided for @partnerRegBreadcrumb.
+  ///
+  /// In en, this message translates to:
+  /// **'Partner Onboarding'**
+  String get partnerRegBreadcrumb;
+
+  /// No description provided for @partnerRegTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Workshop Partner Registration'**
+  String get partnerRegTitle;
+
+  /// No description provided for @partnerRegSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Join Revive\'s AI-driven collision repair network'**
+  String get partnerRegSubtitle;
+
+  /// No description provided for @partnerRegStep1.
+  ///
+  /// In en, this message translates to:
+  /// **'Identity'**
+  String get partnerRegStep1;
+
+  /// No description provided for @partnerRegStep1Sub.
+  ///
+  /// In en, this message translates to:
+  /// **'Legal entity, contact, and tier'**
+  String get partnerRegStep1Sub;
+
+  /// No description provided for @partnerRegStep2.
+  ///
+  /// In en, this message translates to:
+  /// **'Photos'**
+  String get partnerRegStep2;
+
+  /// No description provided for @partnerRegStep2Sub.
+  ///
+  /// In en, this message translates to:
+  /// **'Facility audit photos — 4 slots'**
+  String get partnerRegStep2Sub;
+
+  /// No description provided for @partnerRegStep3.
+  ///
+  /// In en, this message translates to:
+  /// **'Documents'**
+  String get partnerRegStep3;
+
+  /// No description provided for @partnerRegStep3Sub.
+  ///
+  /// In en, this message translates to:
+  /// **'Legal & tax documents — encrypted'**
+  String get partnerRegStep3Sub;
+
+  /// No description provided for @partnerRegStep4.
+  ///
+  /// In en, this message translates to:
+  /// **'Location'**
+  String get partnerRegStep4;
+
+  /// No description provided for @partnerRegStep4Sub.
+  ///
+  /// In en, this message translates to:
+  /// **'Workshop coordinates and service radius'**
+  String get partnerRegStep4Sub;
+
+  /// No description provided for @partnerRegStep5.
+  ///
+  /// In en, this message translates to:
+  /// **'Bank & Sign'**
+  String get partnerRegStep5;
+
+  /// No description provided for @partnerRegStep5Sub.
+  ///
+  /// In en, this message translates to:
+  /// **'Payout account and consent'**
+  String get partnerRegStep5Sub;
+
+  /// No description provided for @partnerRegEntityName.
+  ///
+  /// In en, this message translates to:
+  /// **'Legal Entity Name (PT / CV / Firma)'**
+  String get partnerRegEntityName;
+
+  /// No description provided for @partnerRegBrandName.
+  ///
+  /// In en, this message translates to:
+  /// **'Trade / Workshop Brand Name'**
+  String get partnerRegBrandName;
+
+  /// No description provided for @partnerRegPic.
+  ///
+  /// In en, this message translates to:
+  /// **'PIC / Workshop General Manager'**
+  String get partnerRegPic;
+
+  /// No description provided for @partnerRegLegalAddress.
+  ///
+  /// In en, this message translates to:
+  /// **'Legal Business Address'**
+  String get partnerRegLegalAddress;
+
+  /// No description provided for @partnerRegEmail.
+  ///
+  /// In en, this message translates to:
+  /// **'Official Business Email'**
+  String get partnerRegEmail;
+
+  /// No description provided for @partnerRegEmailRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Email is required'**
+  String get partnerRegEmailRequired;
+
+  /// No description provided for @partnerRegEmailInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'Invalid email address'**
+  String get partnerRegEmailInvalid;
+
+  /// No description provided for @partnerRegEmailSent.
+  ///
+  /// In en, this message translates to:
+  /// **'Verification link sent — check your inbox and click the link.'**
+  String get partnerRegEmailSent;
+
+  /// No description provided for @partnerRegPhone.
+  ///
+  /// In en, this message translates to:
+  /// **'Direct WhatsApp Number'**
+  String get partnerRegPhone;
+
+  /// No description provided for @partnerRegPhoneVerified.
+  ///
+  /// In en, this message translates to:
+  /// **'WhatsApp number verified'**
+  String get partnerRegPhoneVerified;
+
+  /// No description provided for @partnerRegTier.
+  ///
+  /// In en, this message translates to:
+  /// **'Operational Tier'**
+  String get partnerRegTier;
+
+  /// No description provided for @partnerRegPaint.
+  ///
+  /// In en, this message translates to:
+  /// **'Certified Paint Brand'**
+  String get partnerRegPaint;
+
+  /// No description provided for @partnerTier1Name.
+  ///
+  /// In en, this message translates to:
+  /// **'Flagship Spray Facility'**
+  String get partnerTier1Name;
+
+  /// No description provided for @partnerTier1Desc.
+  ///
+  /// In en, this message translates to:
+  /// **'Down-draft booth, dry sanding'**
+  String get partnerTier1Desc;
+
+  /// No description provided for @partnerTier2Name.
+  ///
+  /// In en, this message translates to:
+  /// **'Authorized Partner'**
+  String get partnerTier2Name;
+
+  /// No description provided for @partnerTier2Desc.
+  ///
+  /// In en, this message translates to:
+  /// **'Standard booth, OEM refinish specs'**
+  String get partnerTier2Desc;
+
+  /// No description provided for @partnerTier3Name.
+  ///
+  /// In en, this message translates to:
+  /// **'Express PDR Center'**
+  String get partnerTier3Name;
+
+  /// No description provided for @partnerTier3Desc.
+  ///
+  /// In en, this message translates to:
+  /// **'Paintless dent & spot repair'**
+  String get partnerTier3Desc;
+
+  /// No description provided for @partnerRegSendOtp.
+  ///
+  /// In en, this message translates to:
+  /// **'Send OTP'**
+  String get partnerRegSendOtp;
+
+  /// No description provided for @partnerRegVerify.
+  ///
+  /// In en, this message translates to:
+  /// **'Verify'**
+  String get partnerRegVerify;
+
+  /// No description provided for @partnerRegVerified.
+  ///
+  /// In en, this message translates to:
+  /// **'Verified ✓'**
+  String get partnerRegVerified;
+
+  /// No description provided for @partnerRegOtpCode.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter 6-digit OTP'**
+  String get partnerRegOtpCode;
+
+  /// No description provided for @partnerRegPhotosUploaded.
+  ///
+  /// In en, this message translates to:
+  /// **'photos uploaded'**
+  String get partnerRegPhotosUploaded;
+
+  /// No description provided for @partnerRegPhotosHint.
+  ///
+  /// In en, this message translates to:
+  /// **'At least 1 photo required. Max 4. Shows workshop condition to Revive reviewers.'**
+  String get partnerRegPhotosHint;
+
+  /// No description provided for @partnerRegDocNib.
+  ///
+  /// In en, this message translates to:
+  /// **'Nomor Induk Berusaha'**
+  String get partnerRegDocNib;
+
+  /// No description provided for @partnerRegDocNpwp.
+  ///
+  /// In en, this message translates to:
+  /// **'NPWP Badan Usaha Perusahaan'**
+  String get partnerRegDocNpwp;
+
+  /// No description provided for @partnerRegDocSiup.
+  ///
+  /// In en, this message translates to:
+  /// **'Izin Operasional Bengkel (SIUP)'**
+  String get partnerRegDocSiup;
+
+  /// No description provided for @partnerRegDocKtp.
+  ///
+  /// In en, this message translates to:
+  /// **'KTP Direktur / Penanggung Jawab Teknis'**
+  String get partnerRegDocKtp;
+
+  /// No description provided for @partnerRegDocEncrypted.
+  ///
+  /// In en, this message translates to:
+  /// **'All documents are encrypted and only accessible to Revive\'s verification team.'**
+  String get partnerRegDocEncrypted;
+
+  /// No description provided for @partnerRegSelectFile.
+  ///
+  /// In en, this message translates to:
+  /// **'Select File'**
+  String get partnerRegSelectFile;
+
+  /// No description provided for @partnerRegReplace.
+  ///
+  /// In en, this message translates to:
+  /// **'Replace'**
+  String get partnerRegReplace;
+
+  /// No description provided for @partnerRegSameAsLegal.
+  ///
+  /// In en, this message translates to:
+  /// **'Workshop address same as legal address'**
+  String get partnerRegSameAsLegal;
+
+  /// No description provided for @partnerRegWorkshopAddress.
+  ///
+  /// In en, this message translates to:
+  /// **'Workshop Physical Address'**
+  String get partnerRegWorkshopAddress;
+
+  /// No description provided for @partnerRegMapPin.
+  ///
+  /// In en, this message translates to:
+  /// **'Workshop Map Pin'**
+  String get partnerRegMapPin;
+
+  /// No description provided for @partnerRegLocateMe.
+  ///
+  /// In en, this message translates to:
+  /// **'Use GPS'**
+  String get partnerRegLocateMe;
+
+  /// No description provided for @partnerRegMapHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Tap the map to set pin, or use GPS button above.'**
+  String get partnerRegMapHint;
+
+  /// No description provided for @partnerRegRadius.
+  ///
+  /// In en, this message translates to:
+  /// **'Towing & Pick-up Service Radius'**
+  String get partnerRegRadius;
+
+  /// No description provided for @partnerRegBankName.
+  ///
+  /// In en, this message translates to:
+  /// **'Bank Name'**
+  String get partnerRegBankName;
+
+  /// No description provided for @partnerRegBankAccount.
+  ///
+  /// In en, this message translates to:
+  /// **'Account Number'**
+  String get partnerRegBankAccount;
+
+  /// No description provided for @partnerRegBankHolder.
+  ///
+  /// In en, this message translates to:
+  /// **'Account Holder Name'**
+  String get partnerRegBankHolder;
+
+  /// No description provided for @partnerRegConsent.
+  ///
+  /// In en, this message translates to:
+  /// **'I certify under Indonesian Commercial Law (UU PT & Perbengkelan) that all submitted information is authentic and conforms to the Revive Collision Network Operating SLA.'**
+  String get partnerRegConsent;
+
+  /// No description provided for @partnerRegSubmit.
+  ///
+  /// In en, this message translates to:
+  /// **'Submit Application'**
+  String get partnerRegSubmit;
+
+  /// No description provided for @partnerRegSubmitting.
+  ///
+  /// In en, this message translates to:
+  /// **'Submitting…'**
+  String get partnerRegSubmitting;
+
+  /// No description provided for @partnerRegSubmitFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Submission failed'**
+  String get partnerRegSubmitFailed;
+
+  /// No description provided for @partnerRegBack.
+  ///
+  /// In en, this message translates to:
+  /// **'Back'**
+  String get partnerRegBack;
+
+  /// No description provided for @partnerRegNext.
+  ///
+  /// In en, this message translates to:
+  /// **'Next'**
+  String get partnerRegNext;
+
+  /// No description provided for @partnerRegSuccessTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Application Submitted'**
+  String get partnerRegSuccessTitle;
+
+  /// No description provided for @partnerRegSuccessBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Your application has been sent to the Revive verification team. You will be notified via WhatsApp and email on the outcome.'**
+  String get partnerRegSuccessBody;
+
+  /// No description provided for @partnerRegSuccessPhotos.
+  ///
+  /// In en, this message translates to:
+  /// **'facility photos'**
+  String get partnerRegSuccessPhotos;
+
+  /// No description provided for @partnerRegSuccessDocs.
+  ///
+  /// In en, this message translates to:
+  /// **'legal documents'**
+  String get partnerRegSuccessDocs;
+
+  /// No description provided for @partnerRegGoHome.
+  ///
+  /// In en, this message translates to:
+  /// **'Back to Home'**
+  String get partnerRegGoHome;
+
+  /// No description provided for @partnerNotifApproved.
+  ///
+  /// In en, this message translates to:
+  /// **'Selamat! Pendaftaran bengkel Anda disetujui. Login menggunakan email ini.'**
+  String get partnerNotifApproved;
+
+  /// No description provided for @partnerNotifRejected.
+  ///
+  /// In en, this message translates to:
+  /// **'Pendaftaran bengkel Anda ditolak.'**
+  String get partnerNotifRejected;
+
+  /// No description provided for @partnerNotifRevision.
+  ///
+  /// In en, this message translates to:
+  /// **'Pendaftaran Anda memerlukan perbaikan.'**
+  String get partnerNotifRevision;
 }
 
 class _AppLDelegate extends LocalizationsDelegate<AppL> {

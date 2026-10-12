@@ -1,251 +1,344 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:go_router/go_router.dart';
+import 'package:re_v/l10n/app_localizations.dart';
+import '../../../core/l10n/app_localizations_extension.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/document_picker.dart';
 import '../../../core/utils/guest_session.dart';
 import '../../../core/widgets/rev_app_bar.dart';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PartnerRegistrationScreen — 5-page stepper
+//
+// Page 1: Identity   — name, address, email, phone, tier
+// Page 2: Photos     — 4 facility photo slots
+// Page 3: Documents  — NIB, NPWP, SIUP, KTP
+// Page 4: Location   — geolocation + map pin, service radius
+// Page 5: Bank+Sign  — bank details, consent, submit
+//
+// OTP flow:
+//   • WhatsApp OTP: send-partner-otp edge fn → verify-partner-otp before submit
+//   • Email: Supabase magic-link sent alongside WA OTP; link click flips
+//     email_verified flag on partner_applications row
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum _VerifyState { idle, sending, sent, verified, failed }
+
 class PartnerRegistrationScreen extends StatefulWidget {
   const PartnerRegistrationScreen({super.key});
 
   @override
-  State<PartnerRegistrationScreen> createState() => _PartnerRegistrationScreenState();
+  State<PartnerRegistrationScreen> createState() =>
+      _PartnerRegistrationScreenState();
 }
 
-class _PartnerRegistrationScreenState extends State<PartnerRegistrationScreen> with SingleTickerProviderStateMixin {
-  final _formKey = GlobalKey<FormState>();
-  final _imagePicker = ImagePicker();
+class _PartnerRegistrationScreenState extends State<PartnerRegistrationScreen>
+    with SingleTickerProviderStateMixin {
+  // ── stepper ────────────────────────────────────────────────────────────────
+  int _page = 0; // 0-4
+  static const int _totalPages = 5;
 
-  // Data models
-  int _selectedTier = 1;
+  final _pageKeys = List.generate(
+      _totalPages, (i) => GlobalKey<FormState>(debugLabel: 'page$i'));
+
+  // ── page 1 — identity ──────────────────────────────────────────────────────
+  final _entityNameCtrl = TextEditingController();
+  final _brandNameCtrl = TextEditingController();
+  final _picCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  final _legalAddressCtrl = TextEditingController();
+  int _selectedTier = 2;
   String _selectedPaint = 'glasurit';
-  double _throughput = 16;
-  double _radius = 12;
 
-  // Form controllers — empty by default, no dummy data
-  final _entityNameController = TextEditingController();
-  final _brandNameController = TextEditingController();
-  final _picController = TextEditingController();
-  final _phoneController = TextEditingController();
-  final _emailController = TextEditingController();
-  final _addressController = TextEditingController();
-
-  // Upload state — facility photos (4 slots)
+  // ── page 2 — photos ────────────────────────────────────────────────────────
+  final _imagePicker = ImagePicker();
   final List<Uint8List?> _facilityPhotos = [null, null, null, null];
-  final List<String> _facilityPhotoLabels = [
-    'Workshop Facade', 'Spray Oven Booth', 'Customer Lounge', 'Mixing Station'
-  ];
 
-  // Upload state — legal documents
+  // ── page 3 — documents ────────────────────────────────────────────────────
   final Map<String, Uint8List?> _docFiles = {
-    'nib': null, 'npwp': null, 'siup': null, 'ktp': null
+    'nib': null, 'npwp': null, 'siup': null, 'ktp': null,
   };
   final Map<String, String?> _docFileNames = {
-    'nib': null, 'npwp': null, 'siup': null, 'ktp': null
+    'nib': null, 'npwp': null, 'siup': null, 'ktp': null,
   };
 
+  // ── page 4 — location ──────────────────────────────────────────────────────
+  final _workshopAddressCtrl = TextEditingController();
+  bool _sameAsLegal = true;
+  LatLng? _pin;
+  final _mapCtrl = MapController();
+  bool _locating = false;
+  double _radius = 12;
+
+  // ── page 5 — bank + consent ────────────────────────────────────────────────
+  final _bankNameCtrl = TextEditingController();
+  final _bankAccountCtrl = TextEditingController();
+  final _bankHolderCtrl = TextEditingController();
+  bool _consentChecked = false;
+
+  // ── OTP ───────────────────────────────────────────────────────────────────
+  _VerifyState _waVerify = _VerifyState.idle;
+  _VerifyState _emailVerify = _VerifyState.idle;
+  final _otpCtrl = TextEditingController();
+  String? _otpError;
+
+  // ── submission ────────────────────────────────────────────────────────────
   bool _isSubmitting = false;
-  bool _isSuccess = false;
-  String? _submitError;
-
-  /// Upload stage shown on the submit button while files are in flight.
   String? _submitStage;
+  String? _submitError;
+  bool _isSuccess = false;
 
-  /// Private bucket every other upload path in the product already uses
-  /// (customer checkout, ops stage photos, partner dashboard documents).
   static const _bucket = 'revive-photos';
 
-  late AnimationController _animController;
+  late final AnimationController _anim;
+
+  // ── label helpers ─────────────────────────────────────────────────────────
+  List<String> get _photoLabels => [
+        'Workshop Facade',
+        'Spray / Oven Booth',
+        'Customer Lounge',
+        'Mixing Station',
+      ];
 
   @override
   void initState() {
     super.initState();
-    _animController = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat();
+    _anim = AnimationController(
+        vsync: this, duration: const Duration(seconds: 2))..repeat();
   }
 
   @override
   void dispose() {
-    _animController.dispose();
-    _entityNameController.dispose();
-    _brandNameController.dispose();
-    _picController.dispose();
-    _phoneController.dispose();
-    _emailController.dispose();
-    _addressController.dispose();
+    _anim.dispose();
+    for (final c in [
+      _entityNameCtrl, _brandNameCtrl, _picCtrl, _phoneCtrl, _emailCtrl,
+      _legalAddressCtrl, _workshopAddressCtrl,
+      _bankNameCtrl, _bankAccountCtrl, _bankHolderCtrl, _otpCtrl,
+    ]) { c.dispose(); }
     super.dispose();
   }
 
-  Future<void> _pickFacilityPhoto(int index) async {
-    final XFile? file = await _imagePicker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 1920,
-      imageQuality: 80,
-    );
-    if (file == null) return;
-    final bytes = await file.readAsBytes();
-    setState(() => _facilityPhotos[index] = bytes);
+  // ── navigation ────────────────────────────────────────────────────────────
+  void _next() {
+    final form = _pageKeys[_page].currentState;
+    if (form != null && !form.validate()) return;
+    if (_page < _totalPages - 1) setState(() => _page++);
   }
 
-  // PDF or image — see DocumentPicker for why ImagePicker cannot do this.
+  void _back() {
+    if (_page > 0) setState(() => _page--);
+  }
+
+  // ── geolocation ──────────────────────────────────────────────────────────
+  Future<void> _locateMe() async {
+    setState(() => _locating = true);
+    try {
+      bool svc = await Geolocator.isLocationServiceEnabled();
+      if (!svc) throw Exception('Location services disabled');
+      LocationPermission perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.deniedForever) {
+        throw Exception('Location permission permanently denied');
+      }
+      final pos = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
+      final ll = LatLng(pos.latitude, pos.longitude);
+      setState(() => _pin = ll);
+      _mapCtrl.move(ll, 15);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('GPS: $e'), backgroundColor: Colors.red));
+      }
+    } finally {
+      if (mounted) setState(() => _locating = false);
+    }
+  }
+
+  // ── OTP — WhatsApp ─────────────────────────────────────────────────────────
+  Future<void> _sendWaOtp() async {
+    final phone = _phoneCtrl.text.trim();
+    if (phone.isEmpty) return;
+    setState(() { _waVerify = _VerifyState.sending; _otpError = null; });
+    try {
+      await Supabase.instance.client.functions.invoke(
+        'send-partner-otp',
+        body: {'phone': phone, 'channel': 'whatsapp'},
+      );
+      setState(() => _waVerify = _VerifyState.sent);
+    } catch (e) {
+      setState(() { _waVerify = _VerifyState.failed; _otpError = e.toString(); });
+    }
+  }
+
+  Future<void> _verifyWaOtp() async {
+    final phone = _phoneCtrl.text.trim();
+    final code = _otpCtrl.text.trim();
+    if (code.length != 6) return;
+    try {
+      final res = await Supabase.instance.client.functions.invoke(
+        'verify-partner-otp',
+        body: {'phone': phone, 'code': code},
+      );
+      final ok = (res.data as Map?)?['verified'] == true;
+      setState(() {
+        _waVerify = ok ? _VerifyState.verified : _VerifyState.failed;
+        _otpError = ok ? null : 'Kode OTP salah / expired';
+      });
+    } catch (e) {
+      setState(() { _waVerify = _VerifyState.failed; _otpError = e.toString(); });
+    }
+  }
+
+  // ── OTP — Email ────────────────────────────────────────────────────────────
+  Future<void> _sendEmailOtp() async {
+    final email = _emailCtrl.text.trim();
+    if (email.isEmpty) return;
+    setState(() => _emailVerify = _VerifyState.sending);
+    try {
+      await Supabase.instance.client.auth.signInWithOtp(
+        email: email,
+        shouldCreateUser: false, // only verification, no account creation here
+      );
+      setState(() => _emailVerify = _VerifyState.sent);
+    } catch (e) {
+      // If user doesn't exist we still show "sent" — don't leak existence
+      setState(() => _emailVerify = _VerifyState.sent);
+    }
+  }
+
+  // ── photo picker ──────────────────────────────────────────────────────────
+  Future<void> _pickPhoto(int i) async {
+    final f = await _imagePicker.pickImage(
+        source: ImageSource.gallery, maxWidth: 1920, imageQuality: 80);
+    if (f == null) return;
+    final bytes = await f.readAsBytes();
+    if (mounted) setState(() => _facilityPhotos[i] = bytes);
+  }
+
+  // ── doc picker ────────────────────────────────────────────────────────────
   Future<void> _pickDoc(String key) async {
-    final XFile? file = await DocumentPicker.pick();
-    if (file == null) return;
-    final bytes = await file.readAsBytes();
-    final name = file.name;
-    setState(() {
-      _docFiles[key] = bytes;
-      _docFileNames[key] = name;
-    });
+    final f = await DocumentPicker.pick();
+    if (f == null) return;
+    final bytes = await f.readAsBytes();
+    if (mounted) {
+      setState(() {
+        _docFiles[key] = bytes;
+        _docFileNames[key] = f.name;
+      });
+    }
   }
 
-  /// FB-03 FIX: the picked facility photos and legal documents lived in state and
-  /// were then discarded — [_submit] only ever wrote text columns, so every
-  /// application arrived with no evidence at all (the admin doc counter read 0/4
-  /// forever and the reviewer had nothing to inspect). Files are uploaded first;
-  /// if any upload fails the submission is refused instead of silently losing it.
+  // ── submit ────────────────────────────────────────────────────────────────
   Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    final hasAnyUpload = _facilityPhotos.any((p) => p != null) ||
-        _docFiles.values.any((f) => f != null);
-    if (!hasAnyUpload) {
-      setState(() =>
-          _submitError = 'Add at least one facility photo or legal document.');
+    final form = _pageKeys[4].currentState;
+    if (form != null && !form.validate()) return;
+    if (!_consentChecked) {
+      setState(() => _submitError = 'Centang persetujuan terlebih dahulu');
       return;
     }
 
-    void stage(String label) {
-      if (mounted) setState(() => _submitStage = label);
-    }
-
-    setState(() {
-      _isSubmitting = true;
-      _submitError = null;
-      _submitStage = 'Preparing secure session…';
-    });
+    void stage(String s) { if (mounted) setState(() => _submitStage = s); }
+    setState(() { _isSubmitting = true; _submitError = null; _submitStage = 'Memulai sesi aman…'; });
 
     try {
-      // /partner/register is a public route: there is no session until signup, and
-      // the bucket is private with an <auth.uid()>/... INSERT policy, so a guest
-      // JWT is required before a single byte can be stored (see GuestSession).
       final uid = await GuestSession.ensure();
-      if (uid == null) {
-        throw Exception('Could not start a secure upload session. Please retry.');
-      }
+      if (uid == null) throw Exception('Gagal memulai sesi upload. Coba lagi.');
 
       final storage = Supabase.instance.client.storage;
       final stamp = DateTime.now().millisecondsSinceEpoch;
       final prefix = '$uid/partner-applications/$stamp';
       final failed = <String>[];
 
-      // ── Facility photos — 4 fixed slots ──────────────────────────────────
+      // — photos
       final photoKeys = <Map<String, dynamic>>[];
       for (var i = 0; i < _facilityPhotos.length; i++) {
         final bytes = _facilityPhotos[i];
         if (bytes == null) continue;
-        stage('Uploading ${_facilityPhotoLabels[i]}…');
+        stage('Upload foto ${_photoLabels[i]}…');
         final key = '$prefix/facility/slot$i.jpg';
         try {
-          await storage.from(_bucket).uploadBinary(
-            key,
-            bytes,
-            fileOptions: const FileOptions(
-                contentType: 'image/jpeg',
-                cacheControl: '3600',
-                upsert: false),
-          );
-          photoKeys.add({
-            'slot': i,
-            'label': _facilityPhotoLabels[i],
-            'file_key': key,
-          });
+          await storage.from(_bucket).uploadBinary(key, bytes,
+              fileOptions: const FileOptions(contentType: 'image/jpeg', cacheControl: '3600', upsert: false));
+          photoKeys.add({'slot': i, 'label': _photoLabels[i], 'file_key': key});
         } catch (e) {
-          debugPrint('facility slot$i upload: $e');
-          failed.add(_facilityPhotoLabels[i]);
+          failed.add(_photoLabels[i]);
         }
       }
 
-      // ── Legal documents ──────────────────────────────────────────────────
+      // — documents
       final docKeys = <String, String>{};
-      for (final docType in _docFiles.keys) {
-        final bytes = _docFiles[docType];
+      for (final t in _docFiles.keys) {
+        final bytes = _docFiles[t];
         if (bytes == null) continue;
-        stage('Uploading ${docType.toUpperCase()}…');
-        final name = _docFileNames[docType] ?? '$docType.pdf';
-        final dot = name.lastIndexOf('.');
-        final ext = dot >= 0 && dot < name.length - 1
-            ? name.substring(dot + 1).toLowerCase()
-            : 'pdf';
-        final key = '$prefix/docs/${docType}_$stamp.$ext';
+        stage('Upload ${t.toUpperCase()}…');
+        final name = _docFileNames[t] ?? '$t.pdf';
+        final ext = name.contains('.') ? name.split('.').last.toLowerCase() : 'pdf';
+        final key = '$prefix/docs/${t}_$stamp.$ext';
         try {
-          await storage.from(_bucket).uploadBinary(
-            key,
-            bytes,
-            fileOptions: FileOptions(
-                contentType:
-                    ext == 'pdf' ? 'application/pdf' : 'image/jpeg',
-                cacheControl: '3600',
-                upsert: false),
-          );
-          docKeys[docType] = key;
+          await storage.from(_bucket).uploadBinary(key, bytes,
+              fileOptions: FileOptions(
+                  contentType: ext == 'pdf' ? 'application/pdf' : 'image/jpeg',
+                  cacheControl: '3600', upsert: false));
+          docKeys[t] = key;
         } catch (e) {
-          debugPrint('$docType upload: $e');
-          failed.add(docType.toUpperCase());
+          failed.add(t.toUpperCase());
         }
       }
 
       if (failed.isNotEmpty) {
-        throw Exception(
-            'Could not upload ${failed.join(', ')}. Please retry — nothing was submitted.');
+        throw Exception('Gagal upload: ${failed.join(', ')}. Tidak ada data yang terkirim.');
       }
 
-      stage('Submitting application…');
+      stage('Mengirim aplikasi…');
 
-      // SEC-06 FIX: partner_applications no longer accepts client-side inserts.
-      // Its INSERT policy was `true` for the public role, and GuestSession mints
-      // anonymous sessions on demand, so anyone holding the anon key could script
-      // rows straight into the admin review queue — unvalidated and unattributed.
-      // Submission now goes through submit-partner-application, which validates the
-      // payload, confirms every uploaded key sits under this session's own
-      // '<uid>/partner-applications/' prefix, rate limits per session and rejects a
-      // duplicate pending application for the same email.
-      //
-      // 'pending' is the only status the admin Partner Assessment queue and the
-      // approve-partner edge function recognise; the function sets it server-side.
       final FunctionResponse res;
       try {
         res = await Supabase.instance.client.functions.invoke(
           'submit-partner-application',
           body: {
-            'entity_name': _entityNameController.text.trim(),
-            'shop_name': _brandNameController.text.trim(),
-            'owner_name': _picController.text.trim(),
-            'email': _emailController.text.trim(),
-            'phone': _phoneController.text.trim(),
-            'address': _addressController.text.trim(),
+            'entity_name': _entityNameCtrl.text.trim(),
+            'shop_name': _brandNameCtrl.text.trim(),
+            'owner_name': _picCtrl.text.trim(),
+            'email': _emailCtrl.text.trim(),
+            'phone': _phoneCtrl.text.trim(),
+            'address': _legalAddressCtrl.text.trim(),
+            'workshop_address': _sameAsLegal
+                ? _legalAddressCtrl.text.trim()
+                : _workshopAddressCtrl.text.trim(),
+            'latitude': _pin?.latitude,
+            'longitude': _pin?.longitude,
             'tier': _selectedTier,
             'paint_brand': _selectedPaint,
-            'throughput_capacity': _throughput.round(),
+            'throughput_capacity': 12, // default; not exposed to user
             'service_radius_km': _radius.round(),
-            // Absent docs stay null; present ones carry their storage path.
+            'bank_name': _bankNameCtrl.text.trim(),
+            'bank_account_number': _bankAccountCtrl.text.trim(),
+            'bank_account_holder': _bankHolderCtrl.text.trim(),
             'nib_file_key': docKeys['nib'],
             'npwp_file_key': docKeys['npwp'],
             'siup_file_key': docKeys['siup'],
             'ktp_file_key': docKeys['ktp'],
             'facility_photo_keys': photoKeys,
+            'wa_verified': _waVerify == _VerifyState.verified,
           },
         );
       } on FunctionException catch (e) {
-        // A rejected submission carries a {error} the applicant can act on —
-        // duplicate pending application, rate limit, evidence not theirs.
         final details = e.details;
-        final message = details is Map && details['error'] != null
+        final msg = details is Map && details['error'] != null
             ? details['error'].toString()
-            : 'Submission failed (${e.status}). Please try again.';
-        throw Exception(message);
+            : 'Pengiriman gagal (${e.status}). Coba lagi.';
+        throw Exception(msg);
       }
 
       final data = res.data;
@@ -254,1026 +347,804 @@ class _PartnerRegistrationScreenState extends State<PartnerRegistrationScreen> w
       }
 
       if (!mounted) return;
-      setState(() {
-        _isSubmitting = false;
-        _submitStage = null;
-        _isSuccess = true;
-      });
+      setState(() { _isSubmitting = false; _submitStage = null; _isSuccess = true; });
     } catch (e) {
-      // FB-01 FIX: a rejected insert (unknown column, RLS, offline) or a failed
-      // upload must never be reported as a saved application. The old catch
-      // swallowed the error and the screen still claimed success.
-      debugPrint('partner_application submit: $e');
+      debugPrint('partner_registration submit: $e');
       if (!mounted) return;
       setState(() {
         _isSubmitting = false;
         _submitStage = null;
-        _submitError = e.toString();
+        _submitError = e.toString().replaceFirst('Exception: ', '');
       });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: const Text(
-            'Application could not be submitted. Check your connection and retry.'),
-        backgroundColor: Theme.of(context).colorScheme.error,
-        duration: const Duration(seconds: 6),
-      ));
     }
   }
 
-
+  // ── build ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     final theme = Theme.of(context);
+    final isNarrow = MediaQuery.of(context).size.width < 700;
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
       appBar: const ReVAppBar(),
-      body: SingleChildScrollView(
-        child: Column(
-          children: [
-            // Top Section
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1280),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildBreadcrumb(theme),
-                    const SizedBox(height: 24),
-                    _buildHeadline(theme),
-                    const SizedBox(height: 32),
-                    _buildStepIndicator(theme),
-                    const SizedBox(height: 48),
-                    
-                    if (_isSuccess)
-                       _buildSuccessState(theme)
-                    else 
-                       _buildMainGrid(theme),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBreadcrumb(ThemeData theme) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Row(
-          children: [
-            InkWell(
-              onTap: () => context.go('/'),
-              child: Row(
-                children: [
-                  Icon(Icons.arrow_back, size: 16, color: theme.colorScheme.onSurfaceVariant),
-                  const SizedBox(width: 4),
-                  Text('Partner Onboarding', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: theme.colorScheme.onSurfaceVariant)),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text('/', style: TextStyle(color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5))),
-            const SizedBox(width: 8),
-            Text('revive.co.id/partner/register', style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface)),
-          ],
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHigh,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Row(
-            children: [
-              Container(width: 6, height: 6, decoration: const BoxDecoration(color: Colors.green, shape: BoxShape.circle)),
-              const SizedBox(width: 8),
-              Text('TELEMETRY READY: DRAFT #RV-JKT-8821 SAVED', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface)),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildHeadline(ThemeData theme) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Row(
-                children: [
-                  Icon(Icons.verified, size: 14, color: AppColors.primaryContainer),
-                  SizedBox(width: 4),
-                  Text('AUTHORIZED NETWORK ACCREDITATION', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.5, color: AppColors.primaryContainer)),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text('Workshop Partner Registration', style: TextStyle(fontSize: 48, fontWeight: FontWeight.w800, height: 1.1, color: theme.colorScheme.onSurface, letterSpacing: -1)),
-              const SizedBox(height: 8),
-              Text('Join Revive AI-driven telematics collision network. Receive automated OEM-grade body repair dispatches, guaranteed bi-weekly payouts, and real-time paint matching allocation.', 
-                style: TextStyle(fontSize: 14, color: theme.colorScheme.onSurfaceVariant, height: 1.5),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 24),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainer,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.verified_user, color: AppColors.primaryContainer, size: 24),
-              const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Standard SLA', style: TextStyle(fontSize: 10, color: theme.colorScheme.onSurfaceVariant)),
-                  Text('ISO-17025 Auto Body', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface)),
-                ],
-              ),
-            ],
-          ),
-        )
-      ],
-    );
-  }
-
-  Widget _buildStepIndicator(ThemeData theme) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              _buildStepNode(theme, 'Step 01', 'Workshop Entity', true, false, Icons.check),
-              _buildStepNode(theme, 'Step 02 (Active)', 'Facility Specs', false, true, Icons.garage),
-              _buildStepNode(theme, 'Step 03', 'Legal & Tax', false, false, null, '03'),
-              _buildStepNode(theme, 'Step 04', 'Map Geolocation', false, false, null, '04'),
-              _buildStepNode(theme, 'Step 05', 'Payout & Sign', false, false, null, '05'),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Container(
-            height: 4,
-            width: double.infinity,
-            decoration: BoxDecoration(color: theme.colorScheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(2)),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Container(
-                width: MediaQuery.of(context).size.width * 0.35, // Simulate 40%
-                decoration: BoxDecoration(color: AppColors.primaryContainer, borderRadius: BorderRadius.circular(2)),
-              ),
-            ),
-          )
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStepNode(ThemeData theme, String overline, String title, bool isCompleted, bool isActive, IconData? icon, [String? textIcon]) {
-    final color = isCompleted ? Colors.green : (isActive ? AppColors.primaryContainer : theme.colorScheme.onSurfaceVariant);
-    
-    Widget circleContent;
-    if (icon != null) {
-      circleContent = Icon(icon, size: 16, color: Colors.white);
-    } else {
-      circleContent = Text(textIcon ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white));
-    }
-
-    return Row(
-      children: [
-        Container(
-          width: 32, height: 32,
-          decoration: BoxDecoration(
-            color: isCompleted ? Colors.green : (isActive ? AppColors.primaryContainer : theme.colorScheme.surfaceContainerHigh),
-            shape: BoxShape.circle,
-          ),
-          alignment: Alignment.center,
-          child: circleContent,
-        ),
-        const SizedBox(width: 12),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(overline.toUpperCase(), style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: color, letterSpacing: 1)),
-            Text(title, style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface)),
-          ],
-        )
-      ],
-    );
-  }
-
-  Widget _buildMainGrid(ThemeData theme) {
-    return Form(
-      key: _formKey,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // LEFT COLUMN
-          Expanded(
-            flex: 7,
-            child: Column(
+      body: _isSuccess
+          ? _buildSuccess(theme, l10n)
+          : Column(
               children: [
-                _buildSection1(theme),
-                const SizedBox(height: 24),
-                _buildSection2(theme),
-                const SizedBox(height: 24),
-                _buildSection3(theme),
-                const SizedBox(height: 24),
-                _buildSection4(theme),
-              ],
-            ),
-          ),
-          const SizedBox(width: 32),
-          // RIGHT COLUMN
-          Expanded(
-            flex: 5,
-            child: Column(
-              children: [
-                _buildGeoCard(theme),
-                const SizedBox(height: 24),
-                _buildPayoutCard(theme),
-                const SizedBox(height: 24),
-                _buildBenefitsCard(theme),
-                if (_submitError != null) ...[
-                  const SizedBox(height: 16),
-                  _buildSubmitError(theme),
-                ],
-                const SizedBox(height: 48),
-                _buildStickyFooter(theme),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Build methods for sections...
-  Widget _buildSectionHeader(ThemeData theme, IconData icon, String title, String subtitle, Widget badge) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: theme.colorScheme.surfaceContainer, borderRadius: BorderRadius.circular(8)),
-              child: Icon(icon, size: 20, color: AppColors.primaryContainer),
-            ),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface)),
-                Text(subtitle, style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurfaceVariant)),
-              ],
-            ),
-          ],
-        ),
-        badge
-      ],
-    );
-  }
-
-  Widget _buildSection1(ThemeData theme) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(color: theme.colorScheme.surfaceContainerLow, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 10)]),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildSectionHeader(theme, Icons.apartment, '1. Workshop Identity & Tier', 'Legal entity credentials and operational branding', 
-            Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4), decoration: BoxDecoration(color: AppColors.primaryContainer.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(16)), child: const Text('Required', style: TextStyle(fontSize: 10, color: AppColors.primaryContainer)))),
-          const SizedBox(height: 24),
-          const Text('Operational Tier Accreditation', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(child: _buildTierCard(theme, 1, 'TIER 1', Icons.workspace_premium, 'Flagship Spray Facility', 'Down-draft booth, dry sanding, 85% revenue split guarantee.', '85% Revenue', '> 10 Bays')),
-              const SizedBox(width: 12),
-              Expanded(child: _buildTierCard(theme, 2, 'TIER 2', Icons.store, 'Authorized Partner', 'Standard spray booth, OEM refinish specs, 82% revenue split.', '82% Revenue', '5-9 Bays')),
-              const SizedBox(width: 12),
-              Expanded(child: _buildTierCard(theme, 3, 'TIER 3', Icons.build_circle, 'Express PDR Center', 'Paintless dent removal & spot repair focus, 80% revenue split.', '80% Revenue', '3-5 Bays')),
-            ],
-          ),
-          const SizedBox(height: 24),
-          Row(
-            children: [
-              Expanded(child: _buildTextField(theme, 'Legal Entity Name (PT / CV / Firma)', _entityNameController)),
-              const SizedBox(width: 16),
-              Expanded(child: _buildTextField(theme, 'Trade / Workshop Brand Name', _brandNameController)),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(child: _buildTextField(theme, 'PIC / Workshop General Manager', _picController)),
-              const SizedBox(width: 16),
-              Expanded(child: _buildTextField(theme, 'Direct WhatsApp Number', _phoneController, prefix: '+62')),
-            ],
-          ),
-          const SizedBox(height: 16),
-          _buildTextField(theme, 'Official Business Email Address', _emailController),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTierCard(ThemeData theme, int tierIndex, String badgeText, IconData icon, String title, String desc, String rev, String bays) {
-    final isSelected = _selectedTier == tierIndex;
-    final bg = isSelected ? theme.colorScheme.surfaceContainerHighest : theme.colorScheme.surfaceContainer;
-    return GestureDetector(
-      onTap: () => setState(() => _selectedTier = tierIndex),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(8),
-          border: isSelected ? Border.all(color: AppColors.primaryContainer.withValues(alpha: 0.3)) : null,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: isSelected ? AppColors.primaryContainer : theme.colorScheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(4)), child: Text(badgeText, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: isSelected ? Colors.white : theme.colorScheme.onSurface))),
-                Icon(icon, size: 18, color: isSelected ? AppColors.primaryContainer : theme.colorScheme.onSurfaceVariant),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(title, style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface)),
-            const SizedBox(height: 4),
-            Text(desc, style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurfaceVariant)),
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(rev, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.green)),
-                Text(bays, style: TextStyle(fontSize: 10, color: theme.colorScheme.onSurfaceVariant)),
-              ],
-            )
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTextField(ThemeData theme, String label, TextEditingController controller, {String? prefix}) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label.toUpperCase(), style: TextStyle(fontSize: 10, color: theme.colorScheme.onSurfaceVariant)),
-        const SizedBox(height: 4),
-        Container(
-          height: 44,
-          decoration: BoxDecoration(
-            color: theme.brightness == Brightness.dark ? const Color(0xFF18191C) : theme.colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            children: [
-              if (prefix != null) Container(padding: const EdgeInsets.symmetric(horizontal: 16), decoration: BoxDecoration(color: theme.colorScheme.surfaceContainer, borderRadius: const BorderRadius.only(topLeft: Radius.circular(8), bottomLeft: Radius.circular(8))), alignment: Alignment.center, child: Text(prefix, style: TextStyle(fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface))),
-              Expanded(
-                child: TextFormField(
-                  controller: controller,
-                  style: TextStyle(fontSize: 14, color: theme.colorScheme.onSurface),
-                  decoration: const InputDecoration(
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(horizontal: 16),
-                    isDense: true,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSection2(ThemeData theme) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(color: theme.colorScheme.surfaceContainerLow, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 10)]),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildSectionHeader(theme, Icons.precision_manufacturing, '2. Kapasitas Bengkel', 'Kapasitas harian untuk penugasan otomatis',
-            Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4), decoration: BoxDecoration(color: Colors.green.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(16)), child: const Text('High Capacity', style: TextStyle(fontSize: 10, color: Colors.green)))),
-          const SizedBox(height: 24),
-          // C-47 fix: removed bays/booth/stations — not sent to server, misleading UI
-          // throughput_capacity (jobs/day) is the single capacity field that matters
-          const SizedBox(height: 24),
-          const Text('CERTIFIED PAINT REFINISH BRAND SYSTEM', style: TextStyle(fontSize: 10, color: Colors.grey)),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(child: _buildPaintCard(theme, 'glasurit', 'Glasurit 2K', 'BASF Certified')),
-              const SizedBox(width: 12),
-              Expanded(child: _buildPaintCard(theme, 'spies', 'Spies Hecker', 'Axalta Premium')),
-              const SizedBox(width: 12),
-              Expanded(child: _buildPaintCard(theme, 'sikkens', 'Sikkens', 'AkzoNobel')),
-              const SizedBox(width: 12),
-              Expanded(child: _buildPaintCard(theme, 'nippon', 'Nippon Paint', 'Nax Premila')),
-            ],
-          ),
-          const SizedBox(height: 24),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(color: theme.colorScheme.surfaceContainer, borderRadius: BorderRadius.circular(8)),
-            child: Column(
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('Estimated Daily Panel Repair Capacity', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                    Text('${_throughput.toInt()} - ${_throughput.toInt()+4} Panels / Day', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primaryContainer)),
-                  ],
-                ),
-                Slider(
-                  value: _throughput,
-                  min: 4, max: 30,
-                  activeColor: AppColors.primaryContainer,
-                  onChanged: (v) => setState(() => _throughput = v),
-                ),
-                const Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('Light (4 panels)', style: TextStyle(fontSize: 10, color: Colors.grey)),
-                    Text('Standard (12 panels)', style: TextStyle(fontSize: 10, color: Colors.grey)),
-                    Text('Heavy Industry (30+ panels)', style: TextStyle(fontSize: 10, color: Colors.grey)),
-                  ],
-                )
-              ],
-            ),
-          )
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNumberField(ThemeData theme, String label, String val, String suffix) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label.toUpperCase(), style: TextStyle(fontSize: 10, color: theme.colorScheme.onSurfaceVariant)),
-        const SizedBox(height: 4),
-        Container(
-          height: 44,
-          decoration: BoxDecoration(
-            color: theme.brightness == Brightness.dark ? const Color(0xFF18191C) : theme.colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: TextFormField(
-                  initialValue: val,
-                  style: TextStyle(fontSize: 14, color: theme.colorScheme.onSurface),
-                  decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.symmetric(horizontal: 16), isDense: true),
-                ),
-              ),
-              Padding(padding: const EdgeInsets.only(right: 12), child: Text(suffix, style: TextStyle(fontSize: 10, color: theme.colorScheme.onSurfaceVariant))),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildPaintCard(ThemeData theme, String id, String title, String sub) {
-    final isSelected = _selectedPaint == id;
-    return GestureDetector(
-      onTap: () => setState(() => _selectedPaint = id),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(color: isSelected ? theme.colorScheme.surfaceContainerHighest : theme.colorScheme.surfaceContainer, borderRadius: BorderRadius.circular(8)),
-        child: Row(
-          children: [
-            Radio<String>(value: id, groupValue: _selectedPaint, onChanged: (v) => setState(() => _selectedPaint = v!), activeColor: AppColors.primaryContainer),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface)),
-                  Text(sub, style: TextStyle(fontSize: 10, color: theme.colorScheme.onSurfaceVariant)),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSection3(ThemeData theme) {
-    final uploadedCount = _facilityPhotos.where((p) => p != null).length;
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(color: theme.colorScheme.surfaceContainerLow, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 10)]),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildSectionHeader(theme, Icons.add_photo_alternate, '3. Facility Audit Photos', 'Mandatory multi-angle inspection for Revive quality approval',
-            Text('$uploadedCount of 4 Uploaded', style: TextStyle(fontSize: 10, color: uploadedCount == 4 ? Colors.green : theme.colorScheme.onSurfaceVariant))),
-          const SizedBox(height: 24),
-          Row(
-            children: List.generate(4, (i) {
-              return Expanded(
-                child: Padding(
-                  padding: EdgeInsets.only(right: i < 3 ? 12 : 0),
-                  child: _buildPhotoBox(theme, _facilityPhotoLabels[i], _facilityPhotos[i], i),
-                ),
-              );
-            }),
-          ),
-        ],
-      ),
-    );
-  }
-
-
-  Widget _buildPhotoBox(ThemeData theme, String label, Uint8List? bytes, int index) {
-    return GestureDetector(
-      onTap: () => _pickFacilityPhoto(index),
-      child: Container(
-        height: 128,
-        decoration: BoxDecoration(
-          color: bytes != null
-              ? null
-              : theme.colorScheme.surfaceContainer,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: bytes != null
-                ? Colors.green.withValues(alpha: 0.5)
-                : AppColors.primaryContainer.withValues(alpha: 0.3),
-            width: 1.5,
-          ),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: bytes != null
-            ? Stack(
-                fit: StackFit.expand,
-                children: [
-                  Image.memory(bytes, fit: BoxFit.cover),
-                  Positioned(
-                    top: 6, right: 6,
-                    child: Container(
-                      padding: const EdgeInsets.all(3),
-                      decoration: const BoxDecoration(color: Colors.green, shape: BoxShape.circle),
-                      child: const Icon(Icons.check, size: 12, color: Colors.white),
+                _buildHeader(theme, l10n, isNarrow),
+                _buildStepper(theme, l10n, isNarrow),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.symmetric(
+                        horizontal: isNarrow ? 16 : 32, vertical: 24),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 760),
+                        child: Form(
+                          key: _pageKeys[_page],
+                          child: _buildPage(theme, l10n),
+                        ),
+                      ),
                     ),
                   ),
-                  Positioned(
-                    bottom: 6, left: 6,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.7), borderRadius: BorderRadius.circular(4)),
-                      child: Text(label, style: const TextStyle(fontSize: 9, color: Colors.white)),
-                    ),
-                  ),
-                ],
-              )
-            : Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.cloud_upload, size: 28, color: AppColors.primaryContainer),
-                  const SizedBox(height: 4),
-                  Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
-                  const Text('Tap to Upload', style: TextStyle(fontSize: 10, color: Colors.grey)),
-                ],
-              ),
-      ),
+                ),
+                _buildNavBar(theme, l10n),
+              ],
+            ),
     );
   }
 
-
-  Widget _buildSection4(ThemeData theme) {
+  // ── header ────────────────────────────────────────────────────────────────
+  Widget _buildHeader(ThemeData t, AppL l, bool narrow) {
     return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(color: theme.colorScheme.surfaceContainerLow, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 10)]),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildSectionHeader(theme, Icons.badge, '4. Legal Entity Documentation', 'Validated via OSS Indonesia & Direktorat Jenderal Pajak API',
-            const Text('256-BIT ENCRYPTED', style: TextStyle(fontSize: 10, color: AppColors.primaryContainer, fontFamily: 'monospace'))),
-          const SizedBox(height: 24),
-          _buildDocUploadRow(theme, Icons.description, 'NIB - Nomor Induk Berusaha', 'PDF, JPG up to 10MB', 'nib'),
-          const SizedBox(height: 12),
-          _buildDocUploadRow(theme, Icons.receipt_long, 'NPWP Badan Usaha Perusahaan', 'PDF, JPG up to 10MB', 'npwp'),
-          const SizedBox(height: 12),
-          _buildDocUploadRow(theme, Icons.upload_file, 'Izin Operasional Bengkel (SIUP)', 'PDF, JPG up to 10MB', 'siup'),
-          const SizedBox(height: 12),
-          _buildDocUploadRow(theme, Icons.contact_page, 'KTP Direktur / Penanggung Jawab Teknis', 'PNG, JPG, PDF up to 10MB', 'ktp'),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDocUploadRow(ThemeData theme, IconData icon, String title, String hint, String key) {
-    final hasFile = _docFiles[key] != null;
-    final fileName = _docFileNames[key];
-    return Container(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.symmetric(horizontal: narrow ? 16 : 32, vertical: 20),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainer,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: hasFile
-              ? Colors.green.withValues(alpha: 0.4)
-              : theme.colorScheme.outlineVariant.withValues(alpha: 0.3),
-        ),
+        color: t.colorScheme.surfaceContainerLow,
+        border: Border(bottom: BorderSide(color: t.colorScheme.outlineVariant.withValues(alpha: 0.4))),
       ),
       child: Row(
         children: [
-          Container(
-            width: 40, height: 40,
-            decoration: BoxDecoration(
-              color: hasFile ? Colors.green.withValues(alpha: 0.1) : AppColors.primaryContainer.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(hasFile ? Icons.check_circle_outline : icon, color: hasFile ? Colors.green : AppColors.primaryContainer),
+          GestureDetector(
+            onTap: () => context.go('/'),
+            child: Row(children: [
+              Icon(Icons.arrow_back, size: 16, color: t.colorScheme.onSurfaceVariant),
+              const SizedBox(width: 6),
+              Text(l.partnerRegBreadcrumb, style: TextStyle(fontSize: 12, color: t.colorScheme.onSurfaceVariant)),
+            ]),
           ),
           const SizedBox(width: 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface)),
-                const SizedBox(height: 2),
-                Text(
-                  hasFile ? (fileName ?? 'File selected') : hint,
-                  style: TextStyle(fontSize: 10, color: hasFile ? Colors.green : theme.colorScheme.onSurfaceVariant),
-                  overflow: TextOverflow.ellipsis,
-                ),
+                Text(l.partnerRegTitle, style: TextStyle(fontSize: narrow ? 18 : 22, fontWeight: FontWeight.w800, color: t.colorScheme.onSurface)),
+                Text(l.partnerRegSubtitle, style: TextStyle(fontSize: 12, color: t.colorScheme.onSurfaceVariant)),
               ],
             ),
-          ),
-          const SizedBox(width: 12),
-          ElevatedButton(
-            onPressed: () => _pickDoc(key),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: hasFile ? Colors.green.withValues(alpha: 0.1) : theme.colorScheme.surfaceContainerHighest,
-              foregroundColor: hasFile ? Colors.green : theme.colorScheme.onSurface,
-              elevation: 0,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            ),
-            child: Text(hasFile ? 'Replace' : 'Select File', style: const TextStyle(fontSize: 10)),
           ),
         ],
       ),
     );
   }
 
+  // ── stepper bar ───────────────────────────────────────────────────────────
+  static const _stepIcons = [
+    Icons.badge, Icons.photo_camera, Icons.folder_copy,
+    Icons.location_on, Icons.account_balance,
+  ];
 
-  Widget _buildGeoCard(ThemeData theme) {
+  Widget _buildStepper(ThemeData t, AppL l, bool narrow) {
+    final labels = [
+      l.partnerRegStep1, l.partnerRegStep2, l.partnerRegStep3,
+      l.partnerRegStep4, l.partnerRegStep5,
+    ];
     return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(color: theme.colorScheme.surfaceContainerLow, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 10)]),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildSectionHeader(theme, Icons.pin_drop, 'Service Geolocation', 'Dispatch algorithm clustering coordinates', 
-            Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4), decoration: BoxDecoration(color: Colors.green.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(4)), child: const Text('GPS CALIBRATED', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.green)))),
-          const SizedBox(height: 24),
-          Container(
-            height: 44,
-            decoration: BoxDecoration(
-              color: theme.brightness == Brightness.dark ? const Color(0xFF18191C) : theme.colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              children: [
-                const SizedBox(width: 16),
-                Icon(Icons.search, size: 20, color: theme.colorScheme.onSurfaceVariant),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextFormField(
-                    // C-06 fix: bind to _addressController — was initialValue (dummy, never sent)
-                    controller: _addressController,
-                    style: TextStyle(fontSize: 14, color: theme.colorScheme.onSurface),
-                    decoration: const InputDecoration(
-                      border: InputBorder.none,
-                      isDense: true,
-                      hintText: 'Masukkan alamat lengkap bengkel',
-                    ),
-                    validator: (v) => (v == null || v.trim().isEmpty) ? 'Alamat wajib diisi' : null,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          // Stylized Map
-          Container(
-            height: 288,
-            width: double.infinity,
-            decoration: BoxDecoration(
-              color: theme.brightness == Brightness.dark ? const Color(0xFF18191C) : Colors.grey[300],
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Stack(
-              children: [
-                Positioned.fill(child: Opacity(opacity: 0.1, child: Image.asset('assets/images/car_blueprint_fixed.png', fit: BoxFit.cover))),
-                Positioned.fill(
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.9), borderRadius: BorderRadius.circular(4)), child: const Text('LAT: -6.191204 | LNG: 106.768192', style: TextStyle(fontSize: 10, fontFamily: 'monospace'))),
-                            Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.9), borderRadius: BorderRadius.circular(4)), child: const Row(children: [Icon(Icons.satellite_alt, size: 12, color: Colors.green), SizedBox(width: 4), Text('HD 99.4% FIX', style: TextStyle(fontSize: 10, color: Colors.green))])),
-                          ],
-                        ),
-                        // Radar
-                        AnimatedBuilder(
-                          animation: _animController,
-                          builder: (context, child) {
-                            return Container(
-                              width: 144 + (_animController.value * 20),
-                              height: 144 + (_animController.value * 20),
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: AppColors.primaryContainer.withValues(alpha: 0.1 * (1 - _animController.value)),
-                                border: Border.all(color: AppColors.primaryContainer.withValues(alpha: 0.4 * (1 - _animController.value)), width: 2),
-                              ),
-                              child: Center(
-                                child: Container(
-                                  width: 80, height: 80,
-                                  decoration: BoxDecoration(shape: BoxShape.circle, color: AppColors.primaryContainer.withValues(alpha: 0.2), border: Border.all(color: AppColors.primaryContainer)),
-                                  child: Center(
-                                    child: Container(
-                                      width: 32, height: 32,
-                                      decoration: const BoxDecoration(shape: BoxShape.circle, color: AppColors.primaryContainer, boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 10)]),
-                                      child: const Icon(Icons.build, size: 18, color: Colors.white),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(color: theme.colorScheme.surfaceContainerHigh.withValues(alpha: 0.95), borderRadius: BorderRadius.circular(4)),
-                          child: const Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Row(
-                                children: [
-                                  Icon(Icons.location_on, size: 16, color: AppColors.primaryContainer),
-                                  SizedBox(width: 8),
-                                  Text('Jl. Panjang No. 88, Kebon Jeruk...', style: TextStyle(fontSize: 12, color: Colors.white)),
-                                ],
-                              ),
-                              Text('REPIN', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppColors.primaryContainer)),
-                            ],
-                          ),
-                        )
-                      ],
-                    ),
-                  ),
-                )
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(color: theme.colorScheme.surfaceContainer, borderRadius: BorderRadius.circular(8)),
+      color: t.colorScheme.surfaceContainer,
+      padding: EdgeInsets.symmetric(vertical: 12, horizontal: narrow ? 8 : 24),
+      child: Row(
+        children: List.generate(_totalPages, (i) {
+          final done = i < _page;
+          final active = i == _page;
+          final col = done
+              ? Colors.green
+              : active
+                  ? AppColors.primaryContainer
+                  : t.colorScheme.onSurfaceVariant.withValues(alpha: 0.4);
+          return Expanded(
             child: Column(
               children: [
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('Towing & Mobile Pick-up Coverage', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                    Text('${_radius.toInt()} Kilometers Radius', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primaryContainer)),
+                    if (i > 0)
+                      Expanded(child: Container(height: 2, color: i <= _page ? AppColors.primaryContainer.withValues(alpha: 0.5) : t.colorScheme.outlineVariant.withValues(alpha: 0.3))),
+                    Container(
+                      width: 28, height: 28,
+                      decoration: BoxDecoration(
+                        color: done ? Colors.green : active ? AppColors.primaryContainer : t.colorScheme.surfaceContainerHighest,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(done ? Icons.check : _stepIcons[i], size: 15, color: done || active ? Colors.white : col),
+                    ),
+                    if (i < _totalPages - 1)
+                      Expanded(child: Container(height: 2, color: i < _page ? AppColors.primaryContainer.withValues(alpha: 0.5) : t.colorScheme.outlineVariant.withValues(alpha: 0.3))),
                   ],
                 ),
-                Slider(
-                  value: _radius,
-                  min: 5, max: 30,
-                  activeColor: AppColors.primaryContainer,
-                  onChanged: (v) => setState(() => _radius = v),
-                ),
-                const Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('5 km (Local District)', style: TextStyle(fontSize: 10, color: Colors.grey)),
-                    Text('12 km (Optimal Metropolitan)', style: TextStyle(fontSize: 10, color: Colors.grey)),
-                    Text('30 km (Jabodetabek Wide)', style: TextStyle(fontSize: 10, color: Colors.grey)),
-                  ],
-                )
+                if (!narrow) ...[
+                  const SizedBox(height: 4),
+                  Text(labels[i], style: TextStyle(fontSize: 9, fontWeight: active ? FontWeight.bold : FontWeight.normal, color: active ? AppColors.primaryContainer : t.colorScheme.onSurfaceVariant)),
+                ],
               ],
             ),
-          )
-        ],
+          );
+        }),
       ),
     );
   }
 
-  Widget _buildPayoutCard(ThemeData theme) {
-    // C-47 fix: payout/bank fields removed — never sent to server, showed fake data
-    // Bank account collection deferred until payout infrastructure is built
-    return const SizedBox.shrink();
+  // ── page router ───────────────────────────────────────────────────────────
+  Widget _buildPage(ThemeData t, AppL l) {
+    switch (_page) {
+      case 0: return _buildPage1(t, l);
+      case 1: return _buildPage2(t, l);
+      case 2: return _buildPage3(t, l);
+      case 3: return _buildPage4(t, l);
+      case 4: return _buildPage5(t, l);
+      default: return const SizedBox.shrink();
+    }
   }
 
-  Widget _buildBenefitsCard(ThemeData theme) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(color: theme.colorScheme.surfaceContainerLow, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 10)]),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('REVIVE CERTIFIED BENEFITS', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppColors.primaryContainer, letterSpacing: 1)),
-          const SizedBox(height: 16),
-          _buildBenefitRow(theme, 'Direct AI-Calculated Work Orders', 'Zero estimation negotiations. Standardized repair line-items pre-approved by insurer partners.'),
-          const SizedBox(height: 12),
-          _buildBenefitRow(theme, '14-Day Settlement Guarantee', 'Automated funds release right upon customer biometric digital release and QC inspection pass.'),
-          const SizedBox(height: 12),
-          _buildBenefitRow(theme, 'OEM 2K Paint Reimbursed at Cost', '100% full coverage for verified Glasurit and Spies Hecker mixing units directly restocked.'),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBenefitRow(ThemeData theme, String title, String sub) {
-    return Row(
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PAGE 1 — Identity
+  // ═══════════════════════════════════════════════════════════════════════════
+  Widget _buildPage1(ThemeData t, AppL l) {
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
-          padding: EdgeInsets.only(top: 2),
-          child: Icon(Icons.verified, size: 18, color: Colors.green),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface)),
-              Text(sub, style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurfaceVariant)),
-            ],
-          ),
-        )
+        _pageTitle(t, Icons.badge, l.partnerRegStep1, l.partnerRegStep1Sub),
+        const SizedBox(height: 24),
+
+        // Tier selection
+        Text(l.partnerRegTier.toUpperCase(), style: _labelStyle(t)),
+        const SizedBox(height: 8),
+        _buildTierRow(t, l),
+        const SizedBox(height: 20),
+
+        _field(t, l.partnerRegEntityName, _entityNameCtrl, required: true),
+        const SizedBox(height: 14),
+        _field(t, l.partnerRegBrandName, _brandNameCtrl, required: true),
+        const SizedBox(height: 14),
+        _field(t, l.partnerRegPic, _picCtrl, required: true),
+        const SizedBox(height: 14),
+        _field(t, l.partnerRegLegalAddress, _legalAddressCtrl, required: true, maxLines: 2),
+        const SizedBox(height: 14),
+
+        // Phone with OTP
+        _buildPhoneOtpRow(t, l),
+        const SizedBox(height: 14),
+
+        // Email with verification
+        _buildEmailVerifyRow(t, l),
+        const SizedBox(height: 20),
+
+        // Paint brand
+        Text(l.partnerRegPaint.toUpperCase(), style: _labelStyle(t)),
+        const SizedBox(height: 8),
+        _buildPaintRow(t),
       ],
     );
   }
 
-  Widget _buildStickyFooter(ThemeData theme) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(color: theme.colorScheme.surfaceContainerLow, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 20)]),
-      child: Column(
-        children: [
+  Widget _buildPhoneOtpRow(ThemeData t, AppL l) {
+    final verified = _waVerify == _VerifyState.verified;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(
+              child: _field(t, l.partnerRegPhone, _phoneCtrl,
+                  required: true,
+                  prefix: '+62',
+                  keyboardType: TextInputType.phone,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  suffixIcon: verified
+                      ? const Icon(Icons.verified, color: Colors.green, size: 18)
+                      : null),
+            ),
+            const SizedBox(width: 10),
+            _otpButton(t, l, _waVerify, _sendWaOtp),
+          ],
+        ),
+        if (_waVerify == _VerifyState.sent) ...[
+          const SizedBox(height: 10),
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Checkbox(value: true, onChanged: (v){}, activeColor: AppColors.primaryContainer),
-              const SizedBox(width: 8),
               Expanded(
-                child: RichText(
-                  text: TextSpan(
-                    style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface),
-                    children: [
-                      const TextSpan(text: 'I hereby certify under Indonesian Commercial Law (UU PT & Perbengkelan) that all submitted workshop facility information, spray booth specifications, technician certifications, and company tax identifiers are authentic and conform strictly to '),
-                      TextSpan(text: 'Revive Collision Network Operating SLA v4.2', style: TextStyle(fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface, decoration: TextDecoration.underline)),
-                      const TextSpan(text: '.'),
-                    ],
-                  ),
-                ),
+                child: _field(t, l.partnerRegOtpCode, _otpCtrl,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)]),
+              ),
+              const SizedBox(width: 10),
+              ElevatedButton(
+                onPressed: _verifyWaOtp,
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryContainer,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14)),
+                child: Text(l.partnerRegVerify, style: const TextStyle(fontSize: 12)),
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.lock, size: 16, color: Colors.green),
-                  const SizedBox(width: 8),
-                  Text('End-to-End Encrypted Partner Verification Pipeline • Revive OS 2025', style: TextStyle(fontSize: 10, color: theme.colorScheme.onSurfaceVariant)),
-                ],
-              ),
-              Row(
-                children: [
-                  TextButton(
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Progress saved. Return anytime to complete your application.'),
-                          duration: Duration(seconds: 3),
-                        ),
-                      );
-                    },
-                    style: TextButton.styleFrom(backgroundColor: theme.colorScheme.surfaceContainerHigh, padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16)),
-                    child: Text('Save & Resume Later', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface)),
-                  ),
-
-                  const SizedBox(width: 12),
-                  ElevatedButton.icon(
-                    onPressed: _isSubmitting ? null : _submit,
-                    icon: _isSubmitting ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Icon(Icons.assignment_turned_in, size: 20),
-                    label: Text(_isSubmitting ? (_submitStage ?? 'DISPATCHING VERIFICATION...') : 'SUBMIT PARTNER APPLICATION', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primaryContainer,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
-                  )
-                ],
-              )
-            ],
-          )
+          if (_otpError != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(_otpError!, style: const TextStyle(fontSize: 11, color: Colors.red)),
+            ),
         ],
+        if (_waVerify == _VerifyState.verified)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Row(children: [
+              const Icon(Icons.check_circle, size: 14, color: Colors.green),
+              const SizedBox(width: 4),
+              Text(l.partnerRegPhoneVerified, style: const TextStyle(fontSize: 11, color: Colors.green)),
+            ]),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildEmailVerifyRow(ThemeData t, AppL l) {
+    final sent = _emailVerify == _VerifyState.sent || _emailVerify == _VerifyState.verified;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(child: _field(t, l.partnerRegEmail, _emailCtrl,
+                required: true, keyboardType: TextInputType.emailAddress,
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) return l.partnerRegEmailRequired;
+                  if (!RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(v.trim())) return l.partnerRegEmailInvalid;
+                  return null;
+                })),
+            const SizedBox(width: 10),
+            _otpButton(t, l, _emailVerify, _sendEmailOtp),
+          ],
+        ),
+        if (sent)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Row(children: [
+              const Icon(Icons.mail_outline, size: 14, color: Colors.blue),
+              const SizedBox(width: 4),
+              Expanded(child: Text(l.partnerRegEmailSent, style: const TextStyle(fontSize: 11, color: Colors.blue))),
+            ]),
+          ),
+      ],
+    );
+  }
+
+  Widget _otpButton(ThemeData t, AppL l, _VerifyState state, VoidCallback onTap) {
+    final loading = state == _VerifyState.sending;
+    final done = state == _VerifyState.verified;
+    return SizedBox(
+      height: 46,
+      child: ElevatedButton(
+        onPressed: (loading || done) ? null : onTap,
+        style: ElevatedButton.styleFrom(
+            backgroundColor: done ? Colors.green : t.colorScheme.surfaceContainerHighest,
+            foregroundColor: done ? Colors.white : t.colorScheme.onSurface,
+            elevation: 0,
+            padding: const EdgeInsets.symmetric(horizontal: 14)),
+        child: loading
+            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+            : Text(done ? l.partnerRegVerified : l.partnerRegSendOtp, style: const TextStyle(fontSize: 11)),
       ),
     );
   }
 
-  Widget _buildSubmitError(ThemeData theme) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.errorContainer,
-        borderRadius: BorderRadius.circular(8),
+  Widget _buildTierRow(ThemeData t, AppL l) {
+    return Row(
+      children: [
+        _tierCard(t, 1, 'TIER 1', Icons.workspace_premium, l.partnerTier1Name, l.partnerTier1Desc, '85%'),
+        const SizedBox(width: 10),
+        _tierCard(t, 2, 'TIER 2', Icons.store, l.partnerTier2Name, l.partnerTier2Desc, '82%'),
+        const SizedBox(width: 10),
+        _tierCard(t, 3, 'TIER 3', Icons.build_circle, l.partnerTier3Name, l.partnerTier3Desc, '80%'),
+      ],
+    );
+  }
+
+  Widget _tierCard(ThemeData t, int tier, String badge, IconData icon, String name, String desc, String rev) {
+    final sel = _selectedTier == tier;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => setState(() => _selectedTier = tier),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: sel ? t.colorScheme.surfaceContainerHighest : t.colorScheme.surfaceContainer,
+            borderRadius: BorderRadius.circular(8),
+            border: sel ? Border.all(color: AppColors.primaryContainer.withValues(alpha: 0.5), width: 1.5) : null,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(color: sel ? AppColors.primaryContainer : t.colorScheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(4)),
+                  child: Text(badge, style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: sel ? Colors.white : t.colorScheme.onSurface)),
+                ),
+                Icon(icon, size: 16, color: sel ? AppColors.primaryContainer : t.colorScheme.onSurfaceVariant),
+              ]),
+              const SizedBox(height: 6),
+              Text(name, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: t.colorScheme.onSurface)),
+              const SizedBox(height: 2),
+              Text(desc, style: TextStyle(fontSize: 10, color: t.colorScheme.onSurfaceVariant)),
+              const SizedBox(height: 8),
+              Text(rev, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.green)),
+            ],
+          ),
+        ),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.error_outline, size: 20, color: theme.colorScheme.onErrorContainer),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    );
+  }
+
+  Widget _buildPaintRow(ThemeData t) {
+    const paints = [
+      ('glasurit', 'Glasurit 2K', 'BASF Certified'),
+      ('spies', 'Spies Hecker', 'Axalta Premium'),
+      ('sikkens', 'Sikkens', 'AkzoNobel'),
+      ('nippon', 'Nippon Paint', 'Nax Premila'),
+    ];
+    return Wrap(
+      spacing: 10, runSpacing: 10,
+      children: paints.map((p) {
+        final sel = _selectedPaint == p.$1;
+        return GestureDetector(
+          onTap: () => setState(() => _selectedPaint = p.$1),
+          child: Container(
+            width: 150,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: sel ? t.colorScheme.surfaceContainerHighest : t.colorScheme.surfaceContainer,
+              borderRadius: BorderRadius.circular(8),
+              border: sel ? Border.all(color: AppColors.primaryContainer.withValues(alpha: 0.4)) : null,
+            ),
+            child: Row(
               children: [
-                Text('Submission failed',
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        color: theme.colorScheme.onErrorContainer)),
-                const SizedBox(height: 4),
-                Text('Your application was not saved. Please retry — if this keeps failing, contact partner-support@revive.co.id.',
-                    style: TextStyle(fontSize: 12, color: theme.colorScheme.onErrorContainer)),
-                const SizedBox(height: 4),
-                Text(_submitError ?? '',
-                    style: TextStyle(fontSize: 11, color: theme.colorScheme.onErrorContainer)),
+                Icon(_selectedPaint == p.$1 ? Icons.radio_button_checked : Icons.radio_button_unchecked, size: 18, color: _selectedPaint == p.$1 ? AppColors.primaryContainer : null),
+                Expanded(child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(p.$2, style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: t.colorScheme.onSurface)),
+                    Text(p.$3, style: TextStyle(fontSize: 9, color: t.colorScheme.onSurfaceVariant)),
+                  ],
+                )),
               ],
             ),
           ),
-        ],
+        );
+      }).toList(),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PAGE 2 — Photos
+  // ═══════════════════════════════════════════════════════════════════════════
+  Widget _buildPage2(ThemeData t, AppL l) {
+    final uploaded = _facilityPhotos.where((p) => p != null).length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _pageTitle(t, Icons.photo_camera, l.partnerRegStep2, l.partnerRegStep2Sub),
+        const SizedBox(height: 8),
+        Text('$uploaded / 4 ${l.partnerRegPhotosUploaded}', style: TextStyle(fontSize: 12, color: uploaded == 4 ? Colors.green : t.colorScheme.onSurfaceVariant)),
+        const SizedBox(height: 20),
+        GridView.count(
+          crossAxisCount: 2, shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+          mainAxisSpacing: 12, crossAxisSpacing: 12, childAspectRatio: 1.4,
+          children: List.generate(4, (i) => _photoBox(t, i)),
+        ),
+        const SizedBox(height: 16),
+        Text(l.partnerRegPhotosHint, style: TextStyle(fontSize: 11, color: t.colorScheme.onSurfaceVariant)),
+      ],
+    );
+  }
+
+  Widget _photoBox(ThemeData t, int i) {
+    final bytes = _facilityPhotos[i];
+    return GestureDetector(
+      onTap: () => _pickPhoto(i),
+      child: Container(
+        decoration: BoxDecoration(
+          color: bytes == null ? t.colorScheme.surfaceContainer : null,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: bytes != null ? Colors.green.withValues(alpha: 0.5) : AppColors.primaryContainer.withValues(alpha: 0.3),
+            width: 1.5,
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: bytes != null
+            ? Stack(fit: StackFit.expand, children: [
+                Image.memory(bytes, fit: BoxFit.cover),
+                Positioned(top: 6, right: 6, child: Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: const BoxDecoration(color: Colors.green, shape: BoxShape.circle),
+                  child: const Icon(Icons.check, size: 10, color: Colors.white),
+                )),
+                Positioned(bottom: 0, left: 0, right: 0, child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  color: Colors.black.withValues(alpha: 0.55),
+                  child: Text(_photoLabels[i], style: const TextStyle(fontSize: 10, color: Colors.white)),
+                )),
+              ])
+            : Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                const Icon(Icons.add_photo_alternate, size: 28, color: AppColors.primaryContainer),
+                const SizedBox(height: 6),
+                Text(_photoLabels[i], style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: t.colorScheme.onSurface), textAlign: TextAlign.center),
+                Text('Tap to upload', style: TextStyle(fontSize: 10, color: t.colorScheme.onSurfaceVariant)),
+              ]),
       ),
     );
   }
 
-  Widget _buildSuccessState(ThemeData theme) {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PAGE 3 — Documents
+  // ═══════════════════════════════════════════════════════════════════════════
+  Widget _buildPage3(ThemeData t, AppL l) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _pageTitle(t, Icons.folder_copy, l.partnerRegStep3, l.partnerRegStep3Sub),
+        const SizedBox(height: 20),
+        _docRow(t, l, Icons.description, 'NIB', l.partnerRegDocNib, 'nib'),
+        const SizedBox(height: 12),
+        _docRow(t, l, Icons.receipt_long, 'NPWP', l.partnerRegDocNpwp, 'npwp'),
+        const SizedBox(height: 12),
+        _docRow(t, l, Icons.upload_file, 'SIUP', l.partnerRegDocSiup, 'siup'),
+        const SizedBox(height: 12),
+        _docRow(t, l, Icons.contact_page, 'KTP', l.partnerRegDocKtp, 'ktp'),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(color: t.colorScheme.surfaceContainer, borderRadius: BorderRadius.circular(8)),
+          child: Row(children: [
+            const Icon(Icons.lock_outline, size: 16, color: AppColors.primaryContainer),
+            const SizedBox(width: 8),
+            Expanded(child: Text(l.partnerRegDocEncrypted, style: TextStyle(fontSize: 11, color: t.colorScheme.onSurfaceVariant))),
+          ]),
+        ),
+      ],
+    );
+  }
+
+  Widget _docRow(ThemeData t, AppL l, IconData icon, String code, String name, String key) {
+    final has = _docFiles[key] != null;
+    final fn = _docFileNames[key];
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 64),
-      decoration: BoxDecoration(color: theme.colorScheme.surfaceContainerLow, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 10)]),
-      child: Column(
-        children: [
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: t.colorScheme.surfaceContainer,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: has ? Colors.green.withValues(alpha: 0.4) : t.colorScheme.outlineVariant.withValues(alpha: 0.3)),
+      ),
+      child: Row(children: [
+        Container(
+          width: 36, height: 36,
+          decoration: BoxDecoration(color: has ? Colors.green.withValues(alpha: 0.1) : AppColors.primaryContainer.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
+          child: Icon(has ? Icons.check_circle_outline : icon, color: has ? Colors.green : AppColors.primaryContainer, size: 20),
+        ),
+        const SizedBox(width: 14),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('$code — $name', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: t.colorScheme.onSurface)),
+          Text(fn ?? 'PDF / JPG, maks 10 MB', style: TextStyle(fontSize: 10, color: has ? Colors.green : t.colorScheme.onSurfaceVariant), overflow: TextOverflow.ellipsis),
+        ])),
+        const SizedBox(width: 10),
+        ElevatedButton(
+          onPressed: () => _pickDoc(key),
+          style: ElevatedButton.styleFrom(
+              backgroundColor: has ? Colors.green.withValues(alpha: 0.1) : t.colorScheme.surfaceContainerHighest,
+              foregroundColor: has ? Colors.green : t.colorScheme.onSurface,
+              elevation: 0, padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
+          child: Text(has ? l.partnerRegReplace : l.partnerRegSelectFile, style: const TextStyle(fontSize: 11)),
+        ),
+      ]),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PAGE 4 — Location
+  // ═══════════════════════════════════════════════════════════════════════════
+  Widget _buildPage4(ThemeData t, AppL l) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _pageTitle(t, Icons.location_on, l.partnerRegStep4, l.partnerRegStep4Sub),
+        const SizedBox(height: 16),
+
+        // Same as legal address toggle
+        Row(children: [
+          Checkbox(
+            value: _sameAsLegal,
+            onChanged: (v) { setState(() => _sameAsLegal = v ?? true); },
+            activeColor: AppColors.primaryContainer,
+          ),
+          Text(l.partnerRegSameAsLegal, style: TextStyle(fontSize: 13, color: t.colorScheme.onSurface)),
+        ]),
+
+        if (!_sameAsLegal) ...[
+          const SizedBox(height: 12),
+          _field(t, l.partnerRegWorkshopAddress, _workshopAddressCtrl, required: true, maxLines: 2),
+        ],
+
+        const SizedBox(height: 20),
+
+        // GPS button
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text(l.partnerRegMapPin, style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: t.colorScheme.onSurface)),
+          ElevatedButton.icon(
+            onPressed: _locating ? null : _locateMe,
+            icon: _locating
+                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.my_location, size: 16),
+            label: Text(l.partnerRegLocateMe, style: const TextStyle(fontSize: 12)),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryContainer,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10)),
+          ),
+        ]),
+        if (_pin != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Text(
+              'LAT: ${_pin!.latitude.toStringAsFixed(6)}  LNG: ${_pin!.longitude.toStringAsFixed(6)}',
+              style: const TextStyle(fontSize: 11, fontFamily: 'monospace', color: Colors.green),
+            ),
+          ),
+        const SizedBox(height: 8),
+
+        // flutter_map tile map
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: SizedBox(
+            height: 280,
+            child: FlutterMap(
+              mapController: _mapCtrl,
+              options: MapOptions(
+                initialCenter: _pin ?? const LatLng(-6.200000, 106.816666),
+                initialZoom: _pin != null ? 15 : 11,
+                onTap: (tp, ll) => setState(() => _pin = ll),
+              ),
+              children: [
+                TileLayer(
+                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 're.v.app',
+                ),
+                if (_pin != null)
+                  MarkerLayer(markers: [
+                    Marker(
+                      point: _pin!,
+                      width: 36, height: 36,
+                      child: const Icon(Icons.location_on, color: Colors.red, size: 36),
+                    ),
+                  ]),
+              ],
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 6, bottom: 16),
+          child: Text(l.partnerRegMapHint, style: TextStyle(fontSize: 10, color: t.colorScheme.onSurfaceVariant)),
+        ),
+
+        // Service radius
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(color: t.colorScheme.surfaceContainer, borderRadius: BorderRadius.circular(8)),
+          child: Column(children: [
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Text(l.partnerRegRadius, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              Text('${_radius.toInt()} km', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primaryContainer)),
+            ]),
+            Slider(value: _radius, min: 5, max: 30, activeColor: AppColors.primaryContainer, onChanged: (v) => setState(() => _radius = v)),
+          ]),
+        ),
+      ],
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PAGE 5 — Bank + Consent
+  // ═══════════════════════════════════════════════════════════════════════════
+  Widget _buildPage5(ThemeData t, AppL l) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _pageTitle(t, Icons.account_balance, l.partnerRegStep5, l.partnerRegStep5Sub),
+        const SizedBox(height: 20),
+
+        _field(t, l.partnerRegBankName, _bankNameCtrl, required: true,
+            hint: 'BCA / BNI / Mandiri / BRI…'),
+        const SizedBox(height: 14),
+        _field(t, l.partnerRegBankAccount, _bankAccountCtrl, required: true,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly]),
+        const SizedBox(height: 14),
+        _field(t, l.partnerRegBankHolder, _bankHolderCtrl, required: true),
+        const SizedBox(height: 24),
+
+        if (_submitError != null)
+          Container(
+            padding: const EdgeInsets.all(12),
+            margin: const EdgeInsets.only(bottom: 16),
+            decoration: BoxDecoration(color: t.colorScheme.errorContainer, borderRadius: BorderRadius.circular(8)),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(Icons.error_outline, size: 18, color: t.colorScheme.onErrorContainer),
+              const SizedBox(width: 10),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(l.partnerRegSubmitFailed, style: TextStyle(fontWeight: FontWeight.bold, color: t.colorScheme.onErrorContainer, fontSize: 13)),
+                const SizedBox(height: 4),
+                Text(_submitError!, style: TextStyle(fontSize: 11, color: t.colorScheme.onErrorContainer)),
+              ])),
+            ]),
+          ),
+
+        // Consent
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Checkbox(
+            value: _consentChecked,
+            onChanged: (v) => setState(() => _consentChecked = v ?? false),
+            activeColor: AppColors.primaryContainer,
+          ),
+          const SizedBox(width: 8),
+          Expanded(child: Text(l.partnerRegConsent, style: TextStyle(fontSize: 12, color: t.colorScheme.onSurface, height: 1.5))),
+        ]),
+      ],
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Bottom nav bar
+  // ═══════════════════════════════════════════════════════════════════════════
+  Widget _buildNavBar(ThemeData t, AppL l) {
+    final isLast = _page == _totalPages - 1;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      decoration: BoxDecoration(
+        color: t.colorScheme.surfaceContainerLow,
+        border: Border(top: BorderSide(color: t.colorScheme.outlineVariant.withValues(alpha: 0.4))),
+      ),
+      child: Row(children: [
+        if (_page > 0)
+          TextButton.icon(
+            onPressed: _back,
+            icon: const Icon(Icons.arrow_back, size: 16),
+            label: Text(l.partnerRegBack),
+            style: TextButton.styleFrom(foregroundColor: t.colorScheme.onSurface),
+          ),
+        const Spacer(),
+        if (!isLast)
+          ElevatedButton.icon(
+            onPressed: _next,
+            icon: const Icon(Icons.arrow_forward, size: 16),
+            label: Text(l.partnerRegNext),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryContainer,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14)),
+          )
+        else
+          ElevatedButton.icon(
+            onPressed: (_isSubmitting || !_consentChecked) ? null : _submit,
+            icon: _isSubmitting
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                : const Icon(Icons.assignment_turned_in, size: 18),
+            label: Text(_isSubmitting ? (_submitStage ?? l.partnerRegSubmitting) : l.partnerRegSubmit),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryContainer,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14)),
+          ),
+      ]),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Success
+  // ═══════════════════════════════════════════════════════════════════════════
+  Widget _buildSuccess(ThemeData t, AppL l) {
+    final photos = _facilityPhotos.where((p) => p != null).length;
+    final docs = _docFiles.values.where((f) => f != null).length;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(40),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
           const Icon(Icons.check_circle, size: 80, color: Colors.green),
           const SizedBox(height: 24),
-          Text('APPLICATION SUBMITTED', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface)),
-          const SizedBox(height: 16),
-          Text('Your telematics workshop application has been dispatched to the Revive Verification Matrix.', style: TextStyle(color: theme.colorScheme.onSurfaceVariant)),
+          Text(l.partnerRegSuccessTitle, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: t.colorScheme.onSurface)),
           const SizedBox(height: 12),
-          Text(
-            'Evidence received: ${_facilityPhotos.where((p) => p != null).length}/4 facility photos, '
-            '${_docFiles.values.where((f) => f != null).length}/4 legal documents.',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: theme.colorScheme.onSurface),
-          ),
+          Text(l.partnerRegSuccessBody, style: TextStyle(fontSize: 14, color: t.colorScheme.onSurfaceVariant), textAlign: TextAlign.center),
+          const SizedBox(height: 8),
+          Text('$photos ${l.partnerRegSuccessPhotos} • $docs ${l.partnerRegSuccessDocs}',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: t.colorScheme.onSurface)),
           const SizedBox(height: 32),
           ElevatedButton(
             onPressed: () => context.go('/'),
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryContainer, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16)),
-            child: const Text('RETURN TO TELEMETRY COMMAND', style: TextStyle(fontWeight: FontWeight.bold)),
-          )
-        ],
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryContainer, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14)),
+            child: Text(l.partnerRegGoHome),
+          ),
+        ]),
       ),
+    );
+  }
+
+  // ── shared helpers ────────────────────────────────────────────────────────
+  Widget _pageTitle(ThemeData t, IconData icon, String title, String sub) {
+    return Row(children: [
+      Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(color: AppColors.primaryContainer.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
+        child: Icon(icon, size: 22, color: AppColors.primaryContainer),
+      ),
+      const SizedBox(width: 14),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: t.colorScheme.onSurface)),
+        Text(sub, style: TextStyle(fontSize: 12, color: t.colorScheme.onSurfaceVariant)),
+      ])),
+    ]);
+  }
+
+  TextStyle _labelStyle(ThemeData t) =>
+      TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: t.colorScheme.onSurfaceVariant, letterSpacing: 0.8);
+
+  Widget _field(
+    ThemeData t,
+    String label,
+    TextEditingController ctrl, {
+    bool required = false,
+    String? hint,
+    String? prefix,
+    int maxLines = 1,
+    TextInputType? keyboardType,
+    List<TextInputFormatter>? inputFormatters,
+    Widget? suffixIcon,
+    String? Function(String?)? validator,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label.toUpperCase(), style: _labelStyle(t)),
+        const SizedBox(height: 4),
+        TextFormField(
+          controller: ctrl,
+          maxLines: maxLines,
+          keyboardType: keyboardType,
+          inputFormatters: inputFormatters,
+          style: TextStyle(fontSize: 14, color: t.colorScheme.onSurface),
+          decoration: InputDecoration(
+            hintText: hint,
+            prefixText: prefix,
+            suffixIcon: suffixIcon,
+            filled: true,
+            fillColor: t.brightness == Brightness.dark ? const Color(0xFF18191C) : t.colorScheme.surfaceContainerHighest,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            isDense: true,
+          ),
+          validator: validator ?? (required
+              ? (v) => (v == null || v.trim().isEmpty) ? '$label wajib diisi' : null
+              : null),
+        ),
+      ],
     );
   }
 }

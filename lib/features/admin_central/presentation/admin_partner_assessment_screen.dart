@@ -320,12 +320,83 @@ class _AdminPartnerAssessmentScreenState
     ));
   }
 
-  Future<void> _declineApplication(String applicationId) async {
+  Future<String?> _showReasonDialog({
+    required String title,
+    required String hint,
+    required String actionLabel,
+    required Color actionColor,
+  }) async {
+    final ctrl = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        return AlertDialog(
+          title: Text(title,
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: cs.onSurface)),
+          content: SizedBox(
+            width: 420,
+            child: Column(mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Wajib diisi — akan dikirim ke mitra via WhatsApp & email.',
+                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctrl,
+                maxLines: 4,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: hint,
+                  filled: true,
+                  fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.4),
+                  border: const OutlineInputBorder(
+                      borderRadius: BorderRadius.all(Radius.circular(8)),
+                      borderSide: BorderSide.none),
+                  contentPadding: const EdgeInsets.all(12),
+                ),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, null),
+              child: Text('Batal', style: TextStyle(color: cs.onSurfaceVariant)),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (ctrl.text.trim().isEmpty) return;
+                Navigator.pop(ctx, ctrl.text.trim());
+              },
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: actionColor, foregroundColor: Colors.white),
+              child: Text(actionLabel),
+            ),
+          ],
+        );
+      },
+    );
+    ctrl.dispose();
+    return result;
+  }
+
+  Future<void> _rejectApplication(String applicationId) async {
+    final reason = await _showReasonDialog(
+      title: 'Tolak Pendaftaran',
+      hint: 'Jelaskan alasan penolakan kepada mitra…',
+      actionLabel: 'Tolak & Kirim Notifikasi',
+      actionColor: _red,
+    );
+    if (reason == null || !mounted) return;
     String? failure;
     try {
-      await Supabase.instance.client
-          .from('partner_applications')
-          .update({'status': 'rejected'}).eq('id', applicationId);
+      final res = await Supabase.instance.client.functions.invoke(
+        'reject-partner',
+        body: {'applicationId': applicationId, 'reason': reason},
+      );
+      if (res.status != 200) {
+        failure = (res.data is Map ? res.data['error']?.toString() : null) ?? 'HTTP \${res.status}';
+      }
     } catch (e) {
       failure = e.toString();
     }
@@ -333,11 +404,46 @@ class _AdminPartnerAssessmentScreenState
     ref.invalidate(_pendingApplicationsProvider);
     if (failure != null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Decline failed: $failure'), backgroundColor: _red));
+          content: Text('Gagal menolak: \$failure'),
+          backgroundColor: _red, duration: const Duration(seconds: 6)));
       return;
     }
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('Application declined.')));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Pendaftaran ditolak — mitra dinotifikasi.'),
+        backgroundColor: _red));
+  }
+
+  Future<void> _requestRevision(String applicationId) async {
+    final notes = await _showReasonDialog(
+      title: 'Minta Revisi',
+      hint: 'Dokumen X belum lengkap, foto Y kurang jelas…',
+      actionLabel: 'Kirim Permintaan Revisi',
+      actionColor: _amber,
+    );
+    if (notes == null || !mounted) return;
+    String? failure;
+    try {
+      final res = await Supabase.instance.client.functions.invoke(
+        'request-revision-partner',
+        body: {'applicationId': applicationId, 'notes': notes},
+      );
+      if (res.status != 200) {
+        failure = (res.data is Map ? res.data['error']?.toString() : null) ?? 'HTTP \${res.status}';
+      }
+    } catch (e) {
+      failure = e.toString();
+    }
+    if (!mounted) return;
+    ref.invalidate(_pendingApplicationsProvider);
+    if (failure != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Gagal: \$failure'),
+          backgroundColor: _red, duration: const Duration(seconds: 6)));
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Permintaan revisi terkirim ke mitra via WhatsApp & email.'),
+        backgroundColor: _amber));
   }
 
   /// Opens one uploaded file. The bucket is private, so a signed URL is minted
@@ -507,18 +613,30 @@ class _AdminPartnerAssessmentScreenState
         Row(children: [
           Expanded(
             child: OutlinedButton(
-              onPressed: () => _declineApplication(id),
+              onPressed: () => _rejectApplication(id),
               style: OutlinedButton.styleFrom(
                 foregroundColor: _red,
                 side: const BorderSide(color: _red),
                 padding: const EdgeInsets.symmetric(vertical: 6),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(6)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
               ),
-              child: const Text('Decline', style: TextStyle(fontSize: 11)),
+              child: const Text('Tolak', style: TextStyle(fontSize: 11)),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
+          Expanded(
+            child: OutlinedButton(
+              onPressed: () => _requestRevision(id),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _amber,
+                side: const BorderSide(color: _amber),
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              ),
+              child: const Text('Revisi', style: TextStyle(fontSize: 11)),
+            ),
+          ),
+          const SizedBox(width: 6),
           Expanded(
             child: ElevatedButton(
               onPressed: () => _approveApplication(id),
@@ -526,10 +644,9 @@ class _AdminPartnerAssessmentScreenState
                 backgroundColor: _green,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 6),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(6)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
               ),
-              child: const Text('Approve', style: TextStyle(fontSize: 11)),
+              child: const Text('Setujui', style: TextStyle(fontSize: 11)),
             ),
           ),
         ]),
@@ -681,6 +798,103 @@ class _PartnerDetailPanelState extends ConsumerState<_PartnerDetailPanel>
     if (mounted) setState(() => _isSaving = false);
   }
 
+  Future<void> _updateStatusWithDialog(String decision) async {
+    final isRevision = decision == 'revision';
+    final ctrl = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        return AlertDialog(
+          title: Text(
+            isRevision ? 'Minta Revisi' : 'Tolak Mitra',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: cs.onSurface),
+          ),
+          content: SizedBox(
+            width: 420,
+            child: Column(mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(
+                isRevision
+                    ? 'Jelaskan apa yang perlu diperbaiki — dikirim ke mitra via WhatsApp & email.'
+                    : 'Alasan penolakan wajib diisi — dikirim ke mitra via WhatsApp & email.',
+                style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctrl,
+                maxLines: 4,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: isRevision
+                      ? 'Dokumen X belum lengkap, foto Y kurang jelas…'
+                      : 'Alasan penolakan…',
+                  filled: true,
+                  fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.4),
+                  border: const OutlineInputBorder(
+                      borderRadius: BorderRadius.all(Radius.circular(8)),
+                      borderSide: BorderSide.none),
+                  contentPadding: const EdgeInsets.all(12),
+                ),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text('Batal', style: TextStyle(color: cs.onSurfaceVariant)),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (ctrl.text.trim().isEmpty) return;
+                Navigator.pop(ctx, true);
+              },
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: isRevision ? _amber : _red,
+                  foregroundColor: Colors.white),
+              child: Text(isRevision
+                  ? 'Kirim Permintaan Revisi'
+                  : 'Tolak & Kirim Notifikasi'),
+            ),
+          ],
+        );
+      },
+    );
+    final reason = ctrl.text.trim();
+    ctrl.dispose();
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _isSaving = true);
+    try {
+      final fnName = isRevision ? 'request-revision-partner' : 'reject-partner';
+      final bodyKey = isRevision ? 'notes' : 'reason';
+      final res = await Supabase.instance.client.functions.invoke(
+        fnName,
+        body: {'applicationId': widget.partnerId, bodyKey: reason},
+      );
+      if ((res.data as Map?)?['error'] != null) {
+        throw Exception(res.data['error']);
+      }
+      widget.onStatusChanged();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(isRevision
+              ? 'Permintaan revisi terkirim ke mitra.'
+              : 'Pendaftaran ditolak — mitra dinotifikasi.'),
+          backgroundColor: isRevision ? _amber : _red,
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(mapRawErrorToUserMessage(e)),
+            backgroundColor: _red));
+      }
+    }
+    if (mounted) setState(() => _isSaving = false);
+  }
+
   Future<void> _sendMessage(String content) async {
     if (content.trim().isEmpty) return;
     try {
@@ -759,26 +973,35 @@ class _PartnerDetailPanelState extends ConsumerState<_PartnerDetailPanel>
                   ]),
                 ])),
                 // Assessment action buttons
-                if (status == 'pending' || status == 'approved')
+                if (status == 'pending' || status == 'pending_review' || status == 'approved')
                   _isSaving
                       ? const SizedBox(width: 20, height: 20,
                           child: CircularProgressIndicator(color: _red, strokeWidth: 2))
-                      : Row(children: [
+                      : Wrap(spacing: 8, children: [
                           if (status != 'approved')
                             ElevatedButton.icon(
                               onPressed: () => _updateStatus('approved'),
                               icon: const Icon(Icons.check_circle_outline, size: 16),
-                              label: const Text('Approve'),
+                              label: const Text('Setujui'),
                               style: ElevatedButton.styleFrom(
                                   backgroundColor: _green,
                                   foregroundColor: Colors.white,
                                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8)),
                             ),
-                          const SizedBox(width: 8),
+                          if (status != 'approved')
+                            OutlinedButton.icon(
+                              onPressed: () => _updateStatusWithDialog('revision'),
+                              icon: const Icon(Icons.edit_note_outlined, size: 16),
+                              label: const Text('Revisi'),
+                              style: OutlinedButton.styleFrom(
+                                  foregroundColor: _amber,
+                                  side: const BorderSide(color: _amber),
+                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8)),
+                            ),
                           OutlinedButton.icon(
-                            onPressed: () => _updateStatus('rejected'),
+                            onPressed: () => _updateStatusWithDialog('rejected'),
                             icon: const Icon(Icons.cancel_outlined, size: 16),
-                            label: const Text('Reject'),
+                            label: const Text('Tolak'),
                             style: OutlinedButton.styleFrom(
                                 foregroundColor: _red,
                                 side: const BorderSide(color: _red),
@@ -1497,11 +1720,12 @@ class _DownloadButton extends StatelessWidget {
                     .createSignedUrl(fileKey, 3600);
                 // C-28 fix: open URL directly with launchUrl
                 final uri = Uri.parse(url);
+                final messenger = ScaffoldMessenger.of(context);
                 final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
                 if (!launched && context.mounted) {
                   // Fallback: copy to clipboard
                   await Clipboard.setData(ClipboardData(text: url));
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  messenger.showSnackBar(
                     const SnackBar(content: Text('URL disalin ke clipboard')),
                   );
                 }

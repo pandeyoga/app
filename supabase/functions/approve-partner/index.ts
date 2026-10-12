@@ -77,7 +77,13 @@ serve(async (req) => {
         npwp_file_key: appData.npwp_file_key,
         siup_file_key: appData.siup_file_key,
         ktp_file_key: appData.ktp_file_key,
-        is_active: true
+        is_active: true,
+        workshop_address: appData.workshop_address ?? null,
+        latitude: appData.latitude ?? null,
+        longitude: appData.longitude ?? null,
+        bank_name: appData.bank_name ?? null,
+        bank_account_number: appData.bank_account_number ?? null,
+        bank_account_holder: appData.bank_account_holder ?? null,
       })
       .select()
       .single()
@@ -212,10 +218,33 @@ serve(async (req) => {
     // ── 6. Update the application status ─────────────────────────────────────
     const { error: updateError } = await supabaseAdmin
       .from('partner_applications')
-      .update({ status: 'approved' })
+      .update({ status: 'approved', reviewed_at: new Date().toISOString() })
       .eq('id', applicationId)
 
     if (updateError) throw updateError
+
+    // ── 7. Notify applicant via WA + email ────────────────────────────────────
+    const waMsg = `Selamat! 🎉\n\nPendaftaran bengkel *${appData.shop_name}* sebagai mitra Revive telah *disetujui*.\n\nSilakan cek email Anda untuk link login ke dashboard mitra.\n\nSalam,\nTim Revive`
+    const emailMsg = `Selamat,\n\nPendaftaran bengkel ${appData.shop_name} sebagai mitra Revive telah disetujui.\n\nSilakan cek email ini untuk link login ke dashboard mitra Anda.\n\nSalam,\nTim Revive`
+
+    if (appData.phone) {
+      await supabaseAdmin.rpc('notify', {
+        p_user_id: null, p_job_id: null,
+        p_kind: 'partner_approved', p_channel: 'whatsapp',
+        p_to_address: appData.phone,
+        p_title: 'Pendaftaran Mitra Revive Disetujui',
+        p_body: waMsg, p_payload: {}, p_purpose: 'transactional',
+      })
+    }
+    if (appData.email) {
+      await supabaseAdmin.rpc('notify', {
+        p_user_id: null, p_job_id: null,
+        p_kind: 'partner_approved', p_channel: 'email',
+        p_to_address: appData.email,
+        p_title: 'Pendaftaran Mitra Revive Disetujui',
+        p_body: emailMsg, p_payload: {}, p_purpose: 'transactional',
+      })
+    }
 
     return new Response(
       JSON.stringify({

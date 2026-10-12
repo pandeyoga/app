@@ -22,7 +22,7 @@ const corsHeaders = {
 const RATE_LIMIT_PER_DAY = 3
 
 /** Fields the registration form must supply. */
-const REQUIRED = ['entity_name', 'shop_name', 'owner_name', 'email', 'phone', 'address'] as const
+const REQUIRED = ['entity_name', 'shop_name', 'owner_name', 'email', 'phone', 'address', 'bank_name', 'bank_account_number', 'bank_account_holder'] as const
 
 /** Legal documents, keyed exactly as the form names its picker slots. */
 const DOC_TYPES = ['nib', 'npwp', 'siup', 'ktp'] as const
@@ -195,6 +195,13 @@ serve(async (req) => {
         siup_file_key: docKeys.siup,
         ktp_file_key: docKeys.ktp,
         facility_photo_keys: photoKeys,
+        workshop_address: payload.workshop_address ? String(payload.workshop_address).trim() : null,
+        latitude: payload.latitude != null ? Number(payload.latitude) : null,
+        longitude: payload.longitude != null ? Number(payload.longitude) : null,
+        bank_name: String(payload.bank_name ?? '').trim() || null,
+        bank_account_number: String(payload.bank_account_number ?? '').trim() || null,
+        bank_account_holder: String(payload.bank_account_holder ?? '').trim() || null,
+        wa_verified: payload.wa_verified === true,
       })
       .select('id')
       .single()
