@@ -208,6 +208,86 @@ serve(async (req) => {
 
     if (insertError) throw insertError
 
+    // ── Create / upsert applicant auth account ────────────────────────────────
+    // Generate a random 12-char password — applicant receives it by email and
+    // can log in at any time without a magic link. If they already have an account
+    // (returning applicant) we update their metadata instead of re-creating.
+    const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'
+    let password = ''
+    const arr = new Uint8Array(12)
+    crypto.getRandomValues(arr)
+    for (const b of arr) password += chars[b % chars.length]
+
+    let authUserId: string | null = null
+    try {
+      // Try to create new user
+      const { data: created, error: createErr } = await supabaseAdmin.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,  // auto-confirm — they'll get credentials by email
+        user_metadata: { role: 'partner_applicant', application_id: inserted.id },
+        app_metadata:  { role: 'partner_applicant', application_id: inserted.id },
+      })
+      if (createErr && createErr.message?.includes('already been registered')) {
+        // Existing user — find them and update metadata only (don't reset password)
+        let found = null
+        let page = 1
+        while (!found) {
+          const { data: pg } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: 100 })
+          found = pg.users.find((u) => u.email === email)
+          if (pg.users.length < 100) break
+          page++
+        }
+        if (found) {
+          authUserId = found.id
+          await supabaseAdmin.auth.admin.updateUserById(found.id, {
+            user_metadata: { role: 'partner_applicant', application_id: inserted.id },
+            app_metadata:  { role: 'partner_applicant', application_id: inserted.id },
+          })
+          // Don't send new credentials — they already have an account
+          password = ''  // signal: existing user, skip credential email
+        }
+      } else if (!createErr && created?.user) {
+        authUserId = created.user.id
+      }
+    } catch (_) { /* non-fatal — application already saved */ }
+
+    // Update application row with auth_user_id
+    if (authUserId) {
+      await supabaseAdmin.from('partner_applications')
+        .update({ auth_user_id: authUserId })
+        .eq('id', inserted.id)
+    }
+
+    // ── Send welcome email with credentials ───────────────────────────────────
+    if (password) {
+      // Enqueue via notification_outbox (SMTP picks it up)
+      const emailBody =
+        `Halo ${String(payload.owner_name).trim()},\n\n` +
+        `Pendaftaran bengkel ${String(payload.shop_name).trim()} telah kami terima.\n\n` +
+        `Gunakan akun berikut untuk memantau status pendaftaran Anda kapan saja:\n\n` +
+        `  Website : https://revive.co.id/app/#/partner/application-status\n` +
+        `  Email   : ${email}\n` +
+        `  Password: ${password}\n\n` +
+        `Anda dapat login kapan saja — link tidak diperlukan.\n` +
+        `Ganti password setelah login pertama di menu Profil.\n\n` +
+        `Tim Revive akan menghubungi Anda via WhatsApp dan email setelah proses peninjauan selesai.\n\n` +
+        `Salam,\nTim Revive\npartner@revive.co.id`
+
+      await supabaseAdmin.from('notification_outbox').insert({
+        user_id: authUserId,
+        job_id: null,
+        kind: 'partner_application_received',
+        channel: 'email',
+        to_address: email,
+        title: `[Revive] Pendaftaran Diterima — Kredensial Login Anda`,
+        body: emailBody,
+        payload: {},
+        status: 'pending',
+        purpose: 'transactional',
+      })
+    }
+
     return new Response(
       JSON.stringify({
         success: true,

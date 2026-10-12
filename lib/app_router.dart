@@ -210,7 +210,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         if (role == 'master_admin') return targetPath ?? '/admin-central';
         if (role == 'partner_mechanic') return targetPath ?? '/partner-dashboard';
         if (role == 'partner_staff' || role == 'partner_driver') return targetPath ?? '/ops';
-        return targetPath ?? '/'; 
+        if (role == 'partner_applicant') return targetPath ?? '/partner/application-status';
+        return targetPath ?? '/';
       } else {
         // Consume cached returnTo if present after non-callback login
         final trappedPath = _cachedReturnTo;
