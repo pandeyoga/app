@@ -56,7 +56,9 @@ class _PartnerRegistrationScreenState extends State<PartnerRegistrationScreen>
   final _emailCtrl = TextEditingController();
   final _legalAddressCtrl = TextEditingController();
   int _selectedTier = 2;
-  String _selectedPaint = 'glasurit';
+  final Set<String> _selectedPaints = {'glasurit'};
+  final _customPaintCtrl = TextEditingController();
+  bool _showCustomPaintField = false;
 
   // ── page 2 — photos ────────────────────────────────────────────────────────
   final _imagePicker = ImagePicker();
@@ -122,6 +124,7 @@ class _PartnerRegistrationScreenState extends State<PartnerRegistrationScreen>
       _entityNameCtrl, _brandNameCtrl, _picCtrl, _phoneCtrl, _emailCtrl,
       _legalAddressCtrl, _workshopAddressCtrl,
       _bankNameCtrl, _bankAccountCtrl, _bankHolderCtrl, _otpCtrl,
+      _customPaintCtrl,
     ]) { c.dispose(); }
     super.dispose();
   }
@@ -319,7 +322,11 @@ class _PartnerRegistrationScreenState extends State<PartnerRegistrationScreen>
             'latitude': _pin?.latitude,
             'longitude': _pin?.longitude,
             'tier': _selectedTier,
-            'paint_brand': _selectedPaint,
+            'paint_brand': [
+              ..._selectedPaints,
+              if (_showCustomPaintField && _customPaintCtrl.text.trim().isNotEmpty)
+                ..._customPaintCtrl.text.trim().split(',').map((s) => s.trim()).where((s) => s.isNotEmpty),
+            ].join(','),
             'throughput_capacity': 12, // default; not exposed to user
             'service_radius_km': _radius.round(),
             'bank_name': _bankNameCtrl.text.trim(),
@@ -703,35 +710,111 @@ class _PartnerRegistrationScreenState extends State<PartnerRegistrationScreen>
       ('sikkens', 'Sikkens', 'AkzoNobel'),
       ('nippon', 'Nippon Paint', 'Nax Premila'),
     ];
-    return Wrap(
-      spacing: 10, runSpacing: 10,
-      children: paints.map((p) {
-        final sel = _selectedPaint == p.$1;
-        return GestureDetector(
-          onTap: () => setState(() => _selectedPaint = p.$1),
-          child: Container(
-            width: 150,
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: sel ? t.colorScheme.surfaceContainerHighest : t.colorScheme.surfaceContainer,
-              borderRadius: BorderRadius.circular(8),
-              border: sel ? Border.all(color: AppColors.primaryContainer.withValues(alpha: 0.4)) : null,
-            ),
-            child: Row(
-              children: [
-                Icon(_selectedPaint == p.$1 ? Icons.radio_button_checked : Icons.radio_button_unchecked, size: 18, color: _selectedPaint == p.$1 ? AppColors.primaryContainer : null),
-                Expanded(child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 10, runSpacing: 10,
+          children: [
+            ...paints.map((p) {
+              final sel = _selectedPaints.contains(p.$1);
+              return GestureDetector(
+                onTap: () => setState(() {
+                  if (sel) {
+                    _selectedPaints.remove(p.$1);
+                  } else {
+                    _selectedPaints.add(p.$1);
+                  }
+                }),
+                child: Container(
+                  width: 150,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: sel ? t.colorScheme.surfaceContainerHighest : t.colorScheme.surfaceContainer,
+                    borderRadius: BorderRadius.circular(8),
+                    border: sel ? Border.all(color: AppColors.primaryContainer.withValues(alpha: 0.5), width: 1.5) : null,
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(sel ? Icons.check_box : Icons.check_box_outline_blank,
+                          size: 18, color: sel ? AppColors.primaryContainer : t.colorScheme.onSurfaceVariant),
+                      const SizedBox(width: 6),
+                      Expanded(child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(p.$2, style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: t.colorScheme.onSurface)),
+                          Text(p.$3, style: TextStyle(fontSize: 9, color: t.colorScheme.onSurfaceVariant)),
+                        ],
+                      )),
+                    ],
+                  ),
+                ),
+              );
+            }),
+            // "Lainnya" tile
+            GestureDetector(
+              onTap: () => setState(() => _showCustomPaintField = !_showCustomPaintField),
+              child: Container(
+                width: 150,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: _showCustomPaintField ? t.colorScheme.surfaceContainerHighest : t.colorScheme.surfaceContainer,
+                  borderRadius: BorderRadius.circular(8),
+                  border: _showCustomPaintField
+                      ? Border.all(color: AppColors.primaryContainer.withValues(alpha: 0.5), width: 1.5)
+                      : Border.all(color: t.colorScheme.outlineVariant.withValues(alpha: 0.4), style: BorderStyle.solid),
+                ),
+                child: Row(
                   children: [
-                    Text(p.$2, style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: t.colorScheme.onSurface)),
-                    Text(p.$3, style: TextStyle(fontSize: 9, color: t.colorScheme.onSurfaceVariant)),
+                    Icon(_showCustomPaintField ? Icons.check_box : Icons.check_box_outline_blank,
+                        size: 18, color: _showCustomPaintField ? AppColors.primaryContainer : t.colorScheme.onSurfaceVariant),
+                    const SizedBox(width: 6),
+                    Expanded(child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Lainnya', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: t.colorScheme.onSurface)),
+                        Text('Merek lain', style: TextStyle(fontSize: 9, color: t.colorScheme.onSurfaceVariant)),
+                      ],
+                    )),
                   ],
-                )),
-              ],
+                ),
+              ),
+            ),
+          ],
+        ),
+        if (_showCustomPaintField) ...[
+          const SizedBox(height: 10),
+          TextFormField(
+            controller: _customPaintCtrl,
+            style: TextStyle(fontSize: 13, color: t.colorScheme.onSurface),
+            decoration: InputDecoration(
+              hintText: 'Nama merek cat lainnya (pisahkan koma jika lebih dari satu)',
+              filled: true,
+              fillColor: t.brightness == Brightness.dark
+                  ? const Color(0xFF18191C)
+                  : t.colorScheme.surfaceContainerHighest,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              isDense: true,
+              prefixIcon: const Icon(Icons.edit_outlined, size: 16),
             ),
           ),
-        );
-      }).toList(),
+        ],
+        if (_selectedPaints.isNotEmpty || (_showCustomPaintField && _customPaintCtrl.text.isNotEmpty)) ...[
+          const SizedBox(height: 8),
+          Text(
+            'Dipilih: ${[
+              ..._selectedPaints.map((id) {
+                const names = {'glasurit': 'Glasurit 2K', 'spies': 'Spies Hecker', 'sikkens': 'Sikkens', 'nippon': 'Nippon Paint'};
+                return names[id] ?? id;
+              }),
+              if (_showCustomPaintField && _customPaintCtrl.text.trim().isNotEmpty)
+                _customPaintCtrl.text.trim(),
+            ].join(', ')}',
+            style: TextStyle(fontSize: 11, color: AppColors.primaryContainer, fontWeight: FontWeight.w600),
+          ),
+        ],
+      ],
     );
   }
 
