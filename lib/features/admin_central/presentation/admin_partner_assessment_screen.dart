@@ -1,6 +1,6 @@
 import 'package:re_v/core/utils/error_mapper.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // C-28: Clipboard
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../../core/widgets/signed_image.dart';
@@ -8,81 +8,108 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/widgets/rev_app_bar.dart';
 
-// ─── Design tokens ─────────────────────────────────────────────────────────────
-const _red    = Color(0xFFd10721);
-const _green  = Color(0xFF10B981);
-const _amber  = Color(0xFFF59E0B);
-const _blue   = Color(0xFF3B82F6);
+// ─── Design tokens ────────────────────────────────────────────────────────────
+const _red   = Color(0xFFd10721);
+const _green = Color(0xFF10B981);
+const _amber = Color(0xFFF59E0B);
+const _blue  = Color(0xFF3B82F6);
+
+const _bucket = 'revive-photos';
+
+const _docKeyColumns = <String, String>{
+  'NIB': 'nib_file_key', 'NPWP': 'npwp_file_key',
+  'SIUP': 'siup_file_key', 'KTP': 'ktp_file_key',
+};
+
+// ─── Pagination constants ─────────────────────────────────────────────────────
+const _pageSize = 20;
 
 // ─── Providers ────────────────────────────────────────────────────────────────
 
-final _partnerListProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
-  final rows = await Supabase.instance.client
+// Applications — paginated, filter by status
+final _appPageProvider = StateProvider.autoDispose<int>((ref) => 0);
+final _appStatusFilterProvider = StateProvider.autoDispose<String>((ref) => 'pending');
+final _appSearchProvider = StateProvider.autoDispose<String>((ref) => '');
+
+final _applicationsProvider = FutureProvider.autoDispose
+    .family<List<Map<String, dynamic>>, (int, String, String)>((ref, args) async {
+  final (page, status, search) = args;
+  dynamic q = Supabase.instance.client
+      .from('partner_applications')
+      .select('id, shop_name, entity_name, owner_name, email, phone, '
+          'tier, paint_brand, throughput_capacity, service_radius_km, '
+          'status, submitted_at, created_at, wa_verified, '
+          'nib_file_key, npwp_file_key, siup_file_key, ktp_file_key, facility_photo_keys');
+
+  if (status != 'all') {
+    if (status == 'pending') {
+      q = (q as dynamic).inFilter('status', ['pending', 'pending_review']);
+    } else {
+      q = (q as dynamic).eq('status', status);
+    }
+  }
+  if (search.isNotEmpty) {
+    q = (q as dynamic).or('shop_name.ilike.%$search%,entity_name.ilike.%$search%,email.ilike.%$search%');
+  }
+
+  final rows = await (q as dynamic)
+      .order('submitted_at', ascending: false)
+      .range(page * _pageSize, (page + 1) * _pageSize - 1);
+  return List<Map<String, dynamic>>.from(rows as List);
+});
+
+// Partners — paginated
+final _partnerPageProvider = StateProvider.autoDispose<int>((ref) => 0);
+final _partnerStatusFilterProvider = StateProvider.autoDispose<String>((ref) => 'all');
+final _partnerSearchProvider = StateProvider.autoDispose<String>((ref) => '');
+
+final _partnersProvider = FutureProvider.autoDispose
+    .family<List<Map<String, dynamic>>, (int, String, String)>((ref, args) async {
+  final (page, status, search) = args;
+  dynamic q = Supabase.instance.client
       .from('partners')
       .select('id, shop_name, entity_name, owner_name, tier, status, is_active, '
           'email, phone, address, paint_brand, throughput_capacity, service_radius_km, '
           'working_bays, spray_booths, created_at, '
-          'nib_file_key, npwp_file_key, siup_file_key, ktp_file_key')
-      .order('created_at', ascending: false);
+          'nib_file_key, npwp_file_key, siup_file_key, ktp_file_key');
+
+  if (status != 'all') q = (q as dynamic).eq('status', status);
+  if (search.isNotEmpty) {
+    q = (q as dynamic).or('shop_name.ilike.%$search%,entity_name.ilike.%$search%,email.ilike.%$search%');
+  }
+
+  final rows = await (q as dynamic)
+      .order('created_at', ascending: false)
+      .range(page * _pageSize, (page + 1) * _pageSize - 1);
   return List<Map<String, dynamic>>.from(rows as List);
 });
 
-// FB-01: submitted workshop applications, with the submitted profile and the
-// uploaded evidence keys. Requires 20260922_partner_applications_full_fields.
-final _pendingApplicationsProvider =
-    FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
-  final rows = await Supabase.instance.client
-      .from('partner_applications')
-      .select('id, shop_name, entity_name, owner_name, email, phone, address, '
-          'tier, paint_brand, throughput_capacity, service_radius_km, '
-          'status, created_at, submitted_at, '
-          'nib_file_key, npwp_file_key, siup_file_key, ktp_file_key, '
-          'facility_photo_keys')
-      .inFilter('status', ['pending', 'pending_review'])
-      .order('submitted_at', ascending: false);
-  return List<Map<String, dynamic>>.from(rows as List);
-});
-
-/// Bucket every upload path in the product writes to. Private: the admin opens
-/// evidence through a short-lived signed URL, never a public one.
-const _bucket = 'revive-photos';
-
-const _docKeyColumns = <String, String>{
-  'NIB': 'nib_file_key',
-  'NPWP': 'npwp_file_key',
-  'SIUP': 'siup_file_key',
-  'KTP': 'ktp_file_key',
-};
-
+// Selection state
+final _selectedApplicationIdProvider = StateProvider.autoDispose<String?>((ref) => null);
 final _selectedPartnerIdProvider = StateProvider.autoDispose<String?>((ref) => null);
 
+// Document/photo providers (used by partner detail panel)
 final _partnerDocumentsProvider =
     FutureProvider.autoDispose.family<List<Map<String, dynamic>>, String>((ref, partnerId) async {
   final rows = await Supabase.instance.client
-      .from('partner_documents')
-      .select()
-      .eq('partner_id', partnerId)
-      .order('uploaded_at', ascending: false);
+      .from('partner_documents').select()
+      .eq('partner_id', partnerId).order('uploaded_at', ascending: false);
   return List<Map<String, dynamic>>.from(rows as List);
 });
 
 final _partnerPhotosProvider =
     FutureProvider.autoDispose.family<List<Map<String, dynamic>>, String>((ref, partnerId) async {
   final rows = await Supabase.instance.client
-      .from('partner_facility_photos')
-      .select()
-      .eq('partner_id', partnerId)
-      .order('uploaded_at', ascending: false);
+      .from('partner_facility_photos').select()
+      .eq('partner_id', partnerId).order('uploaded_at', ascending: false);
   return List<Map<String, dynamic>>.from(rows as List);
 });
 
 final _partnerMessagesProvider =
     FutureProvider.autoDispose.family<List<Map<String, dynamic>>, String>((ref, partnerId) async {
   final rows = await Supabase.instance.client
-      .from('partner_messages')
-      .select()
-      .eq('partner_id', partnerId)
-      .order('created_at');
+      .from('partner_messages').select()
+      .eq('partner_id', partnerId).order('created_at');
   return List<Map<String, dynamic>>.from(rows as List);
 });
 
@@ -97,227 +124,606 @@ class AdminPartnerAssessmentScreen extends ConsumerStatefulWidget {
 }
 
 class _AdminPartnerAssessmentScreenState
-    extends ConsumerState<AdminPartnerAssessmentScreen> {
-  String _filterStatus = 'all';   // all | pending | approved | rejected
-  String _search = '';
+    extends ConsumerState<AdminPartnerAssessmentScreen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _rootTabs;
+
+  @override
+  void initState() {
+    super.initState();
+    _rootTabs = TabController(length: 2, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _rootTabs.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final listAsync = ref.watch(_partnerListProvider);
-    final selectedId = ref.watch(_selectedPartnerIdProvider);
-
-    final content = Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // ── Left: partner list ────────────────────────────────────────────
-        Container(
-          width: 320,
-          decoration: BoxDecoration(
-            color: cs.surfaceContainerLowest,
-            border: Border(right: BorderSide(color: cs.outlineVariant)),
-          ),
-          child: Column(children: [
-            _buildPendingApplications(cs),
-            Divider(height: 1, color: cs.outlineVariant),
-            // Search
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: TextField(
-                onChanged: (v) => setState(() => _search = v.toLowerCase()),
-                decoration: InputDecoration(
-                  hintText: 'Search partners…',
-                  prefixIcon: const Icon(Icons.search, size: 18),
-                  filled: true,
-                  fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.4),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide.none),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  isDense: true,
-                ),
-              ),
-            ),
-            // Filter tabs
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Row(children: [
-                for (final s in ['all', 'pending', 'approved', 'rejected'])
-                  Expanded(child: GestureDetector(
-                    onTap: () => setState(() => _filterStatus = s),
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 2),
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      decoration: BoxDecoration(
-                        color: _filterStatus == s
-                            ? _statusColor(s).withValues(alpha: 0.15)
-                            : Colors.transparent,
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        s[0].toUpperCase() + s.substring(1),
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: _filterStatus == s
-                              ? FontWeight.bold
-                              : FontWeight.normal,
-                          color: _filterStatus == s
-                              ? _statusColor(s)
-                              : cs.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  )),
-              ]),
-            ),
-            const SizedBox(height: 8),
-            Divider(height: 1, color: cs.outlineVariant),
-            // List
-            Expanded(
-              child: listAsync.when(
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (e, _) => Center(
-                    child: Text('Error loading partners', style: TextStyle(color: cs.error))),
-                data: (partners) {
-                  final filtered = partners.where((p) {
-                    final status = p['status']?.toString() ?? 'pending';
-                    final name = '${p['shop_name'] ?? ''} ${p['entity_name'] ?? ''}'
-                        .toLowerCase();
-                    return (_filterStatus == 'all' || status == _filterStatus)
-                        && (_search.isEmpty || name.contains(_search));
-                  }).toList();
-
-                  if (filtered.isEmpty) {
-                    return Center(
-                      child: Text('No partners found',
-                          style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
-                    );
-                  }
-                  return ListView.separated(
-                    itemCount: filtered.length,
-                    separatorBuilder: (_, __) =>
-                        Divider(height: 1, color: cs.outlineVariant),
-                    itemBuilder: (ctx, i) {
-                      final p = filtered[i];
-                      final pid = p['id']?.toString() ?? '';
-                      return _PartnerListTile(
-                        partner: p,
-                        isSelected: selectedId == pid,
-                        cs: cs,
-                        onTap: () => ref
-                            .read(_selectedPartnerIdProvider.notifier)
-                            .state = pid,
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
-          ]),
-        ),
-
-        // ── Right: detail panel ───────────────────────────────────────────
-        Expanded(
-          child: selectedId == null
-              ? Center(
-                  child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Icon(Icons.store_mall_directory_outlined,
-                        size: 64, color: cs.onSurfaceVariant.withValues(alpha: 0.3)),
-                    const SizedBox(height: 16),
-                    Text('Select a partner to view details',
-                        style: TextStyle(color: cs.onSurfaceVariant, fontSize: 15)),
-                  ]),
-                )
-              : _PartnerDetailPanel(
-                  key: ValueKey(selectedId),
-                  partnerId: selectedId,
-                  cs: cs,
-                  onStatusChanged: () => ref.invalidate(_partnerListProvider),
-                ),
-        ),
-      ],
-    );
 
     return Scaffold(
       backgroundColor: cs.surface,
       appBar: const ReVAppBar(showBackButton: true),
       body: Column(children: [
-          // Header bar
-          Container(
-            height: 56,
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            decoration: BoxDecoration(
-              color: cs.surfaceContainerLow,
-              border: Border(bottom: BorderSide(color: cs.outlineVariant)),
+        // ── Top bar ────────────────────────────────────────────────────────
+        Container(
+          height: 56,
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          decoration: BoxDecoration(
+            color: cs.surfaceContainerLow,
+            border: Border(bottom: BorderSide(color: cs.outlineVariant)),
+          ),
+          child: Row(children: [
+            const Icon(Icons.store_mall_directory_outlined, color: _red, size: 20),
+            const SizedBox(width: 10),
+            Text('Partner Assessment',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: cs.onSurface)),
+            const Spacer(),
+            TabBar(
+              controller: _rootTabs,
+              isScrollable: true,
+              labelColor: _red,
+              unselectedLabelColor: cs.onSurfaceVariant,
+              indicatorColor: _red,
+              indicatorWeight: 2,
+              dividerColor: Colors.transparent,
+              tabs: const [
+                Tab(text: 'Pendaftaran'),
+                Tab(text: 'Mitra Aktif'),
+              ],
             ),
-            child: Row(children: [
-              const Icon(Icons.store_mall_directory_outlined, color: _red, size: 20),
-              const SizedBox(width: 10),
-              Text('Partner Assessment',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: cs.onSurface)),
-              const SizedBox(width: 16),
-              listAsync.when(
-                data: (partners) => Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                  decoration: BoxDecoration(
-                      color: _red.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(20)),
-                  child: Text('${partners.length} workshops',
-                      style: const TextStyle(color: _red, fontSize: 11, fontWeight: FontWeight.bold)),
+          ]),
+        ),
+
+        // ── Tab content ────────────────────────────────────────────────────
+        Expanded(
+          child: TabBarView(controller: _rootTabs, children: [
+            _ApplicationsTab(cs: cs),
+            _PartnersTab(cs: cs),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+// ─── Tab: Pending Applications ────────────────────────────────────────────────
+
+class _ApplicationsTab extends ConsumerStatefulWidget {
+  final ColorScheme cs;
+  const _ApplicationsTab({required this.cs});
+
+  @override
+  ConsumerState<_ApplicationsTab> createState() => _ApplicationsTabState();
+}
+
+class _ApplicationsTabState extends ConsumerState<_ApplicationsTab> {
+  final _searchCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = widget.cs;
+    final page = ref.watch(_appPageProvider);
+    final status = ref.watch(_appStatusFilterProvider);
+    final search = ref.watch(_appSearchProvider);
+    final selectedId = ref.watch(_selectedApplicationIdProvider);
+    final appsAsync = ref.watch(_applicationsProvider((page, status, search)));
+
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // ── Left: table ──────────────────────────────────────────────────────
+      Container(
+        width: 380,
+        decoration: BoxDecoration(
+          color: cs.surfaceContainerLowest,
+          border: Border(right: BorderSide(color: cs.outlineVariant)),
+        ),
+        child: Column(children: [
+          // Search + filters
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(children: [
+              TextField(
+                controller: _searchCtrl,
+                onChanged: (v) {
+                  ref.read(_appSearchProvider.notifier).state = v.toLowerCase();
+                  ref.read(_appPageProvider.notifier).state = 0;
+                },
+                decoration: InputDecoration(
+                  hintText: 'Cari nama / email…',
+                  prefixIcon: const Icon(Icons.search, size: 18),
+                  filled: true,
+                  fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.4),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  isDense: true,
                 ),
-                loading: () => const SizedBox(),
-                error: (_, __) => const SizedBox(),
               ),
-              const Spacer(),
-              TextButton.icon(
-                onPressed: () => ref.invalidate(_partnerListProvider),
-                icon: const Icon(Icons.refresh, size: 16),
-                label: const Text('Refresh'),
-                style: TextButton.styleFrom(foregroundColor: cs.onSurfaceVariant),
+              const SizedBox(height: 8),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(children: [
+                  for (final s in ['pending', 'approved', 'rejected', 'all'])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: GestureDetector(
+                        onTap: () {
+                          ref.read(_appStatusFilterProvider.notifier).state = s;
+                          ref.read(_appPageProvider.notifier).state = 0;
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: status == s
+                                ? _statusColor(s).withValues(alpha: 0.15)
+                                : cs.surfaceContainerHigh,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            s == 'pending' ? 'Pending' :
+                            s == 'approved' ? 'Approved' :
+                            s == 'rejected' ? 'Rejected' : 'Semua',
+                            style: TextStyle(
+                              fontSize: 11, fontWeight: FontWeight.bold,
+                              color: status == s ? _statusColor(s) : cs.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ]),
               ),
             ]),
           ),
-          Expanded(child: content),
+          Divider(height: 1, color: cs.outlineVariant),
+
+          // List
+          Expanded(
+            child: appsAsync.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => Center(child: Text('Error: $e',
+                  style: TextStyle(color: cs.error, fontSize: 12))),
+              data: (apps) {
+                if (apps.isEmpty) {
+                  return Center(child: Text('Tidak ada pendaftaran.',
+                      style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)));
+                }
+                return ListView.separated(
+                  itemCount: apps.length,
+                  separatorBuilder: (_, __) => Divider(height: 1, color: cs.outlineVariant),
+                  itemBuilder: (ctx, i) {
+                    final a = apps[i];
+                    final id = a['id']?.toString() ?? '';
+                    final isSelected = selectedId == id;
+                    final appStatus = a['status']?.toString() ?? 'pending';
+                    final docCount = _docKeyColumns.values.where((k) => a[k] != null).length;
+                    final photoCount = (a['facility_photo_keys'] as List?)?.length ?? 0;
+                    return InkWell(
+                      onTap: () {
+                        ref.read(_selectedApplicationIdProvider.notifier).state = id;
+                        ref.read(_selectedPartnerIdProvider.notifier).state = null;
+                      },
+                      child: Container(
+                        color: isSelected ? _amber.withValues(alpha: 0.1) : null,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Row(children: [
+                            Expanded(child: Text(
+                              a['shop_name']?.toString() ?? a['entity_name']?.toString() ?? '—',
+                              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                                  color: cs.onSurface),
+                              maxLines: 1, overflow: TextOverflow.ellipsis,
+                            )),
+                            _StatusChip(appStatus),
+                          ]),
+                          const SizedBox(height: 2),
+                          Text(a['entity_name']?.toString() ?? '',
+                              style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                              maxLines: 1, overflow: TextOverflow.ellipsis),
+                          const SizedBox(height: 2),
+                          Text(a['email']?.toString() ?? '',
+                              style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                              maxLines: 1, overflow: TextOverflow.ellipsis),
+                          const SizedBox(height: 6),
+                          Row(children: [
+                            _Badge('T${a['tier'] ?? '?'}', cs.surfaceContainerHigh, cs.onSurface),
+                            const SizedBox(width: 6),
+                            _Badge('$docCount/4 dok',
+                                docCount == 4 ? _green.withValues(alpha: 0.12) : _amber.withValues(alpha: 0.12),
+                                docCount == 4 ? _green : _amber),
+                            const SizedBox(width: 6),
+                            _Badge('$photoCount/4 foto',
+                                photoCount == 4 ? _green.withValues(alpha: 0.12) : _amber.withValues(alpha: 0.12),
+                                photoCount == 4 ? _green : _amber),
+                            if (isSelected) ...[
+                              const Spacer(),
+                              const Icon(Icons.chevron_right, size: 16, color: _amber),
+                            ],
+                          ]),
+                          const SizedBox(height: 2),
+                          Text(
+                            _fmtDate(a['submitted_at']?.toString() ?? a['created_at']?.toString()),
+                            style: TextStyle(fontSize: 10, color: cs.onSurfaceVariant),
+                          ),
+                        ]),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+
+          // Pagination
+          _PaginationBar(
+            page: page,
+            hasNext: appsAsync.value?.length == _pageSize,
+            onPrev: page > 0 ? () => ref.read(_appPageProvider.notifier).state-- : null,
+            onNext: (appsAsync.value?.length == _pageSize)
+                ? () => ref.read(_appPageProvider.notifier).state++
+                : null,
+            cs: cs,
+          ),
         ]),
-    );
+      ),
+
+      // ── Right: detail panel ───────────────────────────────────────────────
+      Expanded(
+        child: selectedId == null
+            ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Icon(Icons.inbox_outlined, size: 64, color: cs.onSurfaceVariant.withValues(alpha: 0.3)),
+                const SizedBox(height: 16),
+                Text('Pilih pendaftaran untuk ditinjau',
+                    style: TextStyle(color: cs.onSurfaceVariant, fontSize: 15)),
+              ]))
+            : _ApplicationDetailPanel(
+                key: ValueKey('app_$selectedId'),
+                applicationId: selectedId,
+                cs: cs,
+                onActionDone: () {
+                  ref.invalidate(_applicationsProvider);
+                  ref.read(_selectedApplicationIdProvider.notifier).state = null;
+                },
+              ),
+      ),
+    ]);
   }
 
-  // ── FB-01: submitted workshop applications ────────────────────────────────
-  // Before this, /partner/register wrote to partner_applications but nothing in
-  // Admin Central ever read that table, so submissions were invisible.
+  Color _statusColor(String s) {
+    switch (s) {
+      case 'approved': return _green;
+      case 'rejected': return _red;
+      case 'pending': return _amber;
+      default: return _blue;
+    }
+  }
 
-  Future<void> _approveApplication(String applicationId) async {
-    // approve-partner is the only path that may create a partners row: it runs as
-    // service_role, creates the partner, invites the owner and writes app_metadata.
-    // There is deliberately no INSERT policy on partners for the admin client.
-    String? failure;
+  String _fmtDate(String? dt) {
+    if (dt == null) return '—';
+    try { return DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(dt).toLocal()); }
+    catch (_) { return dt; }
+  }
+}
+
+// ─── Tab: Active Partners ─────────────────────────────────────────────────────
+
+class _PartnersTab extends ConsumerStatefulWidget {
+  final ColorScheme cs;
+  const _PartnersTab({required this.cs});
+
+  @override
+  ConsumerState<_PartnersTab> createState() => _PartnersTabState();
+}
+
+class _PartnersTabState extends ConsumerState<_PartnersTab> {
+  final _searchCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = widget.cs;
+    final page = ref.watch(_partnerPageProvider);
+    final status = ref.watch(_partnerStatusFilterProvider);
+    final search = ref.watch(_partnerSearchProvider);
+    final selectedId = ref.watch(_selectedPartnerIdProvider);
+    final partnersAsync = ref.watch(_partnersProvider((page, status, search)));
+
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // ── Left: table ──────────────────────────────────────────────────────
+      Container(
+        width: 340,
+        decoration: BoxDecoration(
+          color: cs.surfaceContainerLowest,
+          border: Border(right: BorderSide(color: cs.outlineVariant)),
+        ),
+        child: Column(children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(children: [
+              TextField(
+                controller: _searchCtrl,
+                onChanged: (v) {
+                  ref.read(_partnerSearchProvider.notifier).state = v.toLowerCase();
+                  ref.read(_partnerPageProvider.notifier).state = 0;
+                },
+                decoration: InputDecoration(
+                  hintText: 'Cari nama / email…',
+                  prefixIcon: const Icon(Icons.search, size: 18),
+                  filled: true,
+                  fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.4),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  isDense: true,
+                ),
+              ),
+              const SizedBox(height: 8),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(children: [
+                  for (final s in ['all', 'approved', 'pending', 'rejected'])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: GestureDetector(
+                        onTap: () {
+                          ref.read(_partnerStatusFilterProvider.notifier).state = s;
+                          ref.read(_partnerPageProvider.notifier).state = 0;
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: status == s
+                                ? _statusColor(s).withValues(alpha: 0.15)
+                                : cs.surfaceContainerHigh,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            s == 'all' ? 'Semua' :
+                            s == 'approved' ? 'Approved' :
+                            s == 'pending' ? 'Pending' : 'Rejected',
+                            style: TextStyle(
+                              fontSize: 11, fontWeight: FontWeight.bold,
+                              color: status == s ? _statusColor(s) : cs.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ]),
+              ),
+            ]),
+          ),
+          Divider(height: 1, color: cs.outlineVariant),
+          Expanded(
+            child: partnersAsync.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => Center(child: Text('Error: $e',
+                  style: TextStyle(color: cs.error, fontSize: 12))),
+              data: (partners) {
+                if (partners.isEmpty) {
+                  return Center(child: Text('Tidak ada mitra.',
+                      style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)));
+                }
+                return ListView.separated(
+                  itemCount: partners.length,
+                  separatorBuilder: (_, __) => Divider(height: 1, color: cs.outlineVariant),
+                  itemBuilder: (ctx, i) {
+                    final p = partners[i];
+                    final id = p['id']?.toString() ?? '';
+                    final isSelected = selectedId == id;
+                    final pStatus = p['status']?.toString() ?? 'pending';
+                    final isActive = p['is_active'] == true;
+                    final docCount = _docKeyColumns.values.where((k) => p[k] != null).length;
+                    return InkWell(
+                      onTap: () {
+                        ref.read(_selectedPartnerIdProvider.notifier).state = id;
+                        ref.read(_selectedApplicationIdProvider.notifier).state = null;
+                      },
+                      child: Container(
+                        color: isSelected ? _red.withValues(alpha: 0.06) : null,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        child: Row(children: [
+                          Container(width: 8, height: 8,
+                              decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: isActive ? _green : cs.outlineVariant)),
+                          const SizedBox(width: 10),
+                          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text(
+                              p['shop_name']?.toString().isNotEmpty == true
+                                  ? p['shop_name'].toString()
+                                  : p['entity_name']?.toString() ?? '—',
+                              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: cs.onSurface),
+                              maxLines: 1, overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(p['email']?.toString() ?? '',
+                                style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                                maxLines: 1, overflow: TextOverflow.ellipsis),
+                            const SizedBox(height: 4),
+                            Row(children: [
+                              _Badge('T${p['tier'] ?? '?'}', cs.surfaceContainerHigh, cs.onSurface),
+                              const SizedBox(width: 6),
+                              _Badge('$docCount/4 dok',
+                                  docCount == 4 ? _green.withValues(alpha: 0.12) : _amber.withValues(alpha: 0.12),
+                                  docCount == 4 ? _green : _amber),
+                            ]),
+                          ])),
+                          const SizedBox(width: 8),
+                          _StatusChip(pStatus),
+                        ]),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+          _PaginationBar(
+            page: page,
+            hasNext: partnersAsync.value?.length == _pageSize,
+            onPrev: page > 0 ? () => ref.read(_partnerPageProvider.notifier).state-- : null,
+            onNext: (partnersAsync.value?.length == _pageSize)
+                ? () => ref.read(_partnerPageProvider.notifier).state++
+                : null,
+            cs: cs,
+          ),
+        ]),
+      ),
+
+      // ── Right: partner detail ─────────────────────────────────────────────
+      Expanded(
+        child: selectedId == null
+            ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Icon(Icons.store_mall_directory_outlined, size: 64,
+                    color: cs.onSurfaceVariant.withValues(alpha: 0.3)),
+                const SizedBox(height: 16),
+                Text('Pilih mitra untuk melihat detail',
+                    style: TextStyle(color: cs.onSurfaceVariant, fontSize: 15)),
+              ]))
+            : _PartnerDetailPanel(
+                key: ValueKey(selectedId),
+                partnerId: selectedId,
+                cs: cs,
+                onStatusChanged: () => ref.invalidate(_partnersProvider),
+              ),
+      ),
+    ]);
+  }
+
+  Color _statusColor(String s) {
+    switch (s) {
+      case 'approved': return _green;
+      case 'rejected': return _red;
+      case 'pending': return _amber;
+      default: return _blue;
+    }
+  }
+}
+
+// ─── Pagination bar ───────────────────────────────────────────────────────────
+class _PaginationBar extends StatelessWidget {
+  final int page;
+  final bool hasNext;
+  final VoidCallback? onPrev;
+  final VoidCallback? onNext;
+  final ColorScheme cs;
+  const _PaginationBar({required this.page, required this.hasNext,
+      this.onPrev, this.onNext, required this.cs});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(border: Border(top: BorderSide(color: cs.outlineVariant))),
+      child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text('Halaman ${page + 1}', style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+        Row(children: [
+          IconButton(
+            onPressed: onPrev,
+            icon: const Icon(Icons.chevron_left),
+            iconSize: 18,
+            color: onPrev != null ? cs.onSurface : cs.onSurfaceVariant.withValues(alpha: 0.3),
+            visualDensity: VisualDensity.compact,
+          ),
+          IconButton(
+            onPressed: onNext,
+            icon: const Icon(Icons.chevron_right),
+            iconSize: 18,
+            color: onNext != null ? cs.onSurface : cs.onSurfaceVariant.withValues(alpha: 0.3),
+            visualDensity: VisualDensity.compact,
+          ),
+        ]),
+      ]),
+    );
+  }
+}
+
+// ─── Application detail panel (pre-approval) ─────────────────────────────────
+// Full review view for a partner_applications row — all fields, signed-URL docs
+// and facility photos, plus Setujui / Revisi / Tolak actions.
+
+class _ApplicationDetailPanel extends ConsumerStatefulWidget {
+  final String applicationId;
+  final ColorScheme cs;
+  final VoidCallback onActionDone;
+
+  const _ApplicationDetailPanel({
+    super.key,
+    required this.applicationId,
+    required this.cs,
+    required this.onActionDone,
+  });
+
+  @override
+  ConsumerState<_ApplicationDetailPanel> createState() =>
+      _ApplicationDetailPanelState();
+}
+
+class _ApplicationDetailPanelState
+    extends ConsumerState<_ApplicationDetailPanel>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabs;
+  bool _isSaving = false;
+  Map<String, dynamic>? _app;
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabs = TabController(length: 3, vsync: this);
+    _loadApplication();
+  }
+
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadApplication() async {
     try {
-      final res = await Supabase.instance.client.functions
-          .invoke('approve-partner', body: {'applicationId': applicationId});
-      if (res.status != 200) {
-        failure = (res.data is Map ? res.data['error']?.toString() : null) ??
-            'HTTP ${res.status}';
+      final row = await Supabase.instance.client
+          .from('partner_applications')
+          .select()
+          .eq('id', widget.applicationId)
+          .single();
+      if (mounted) setState(() { _app = Map<String, dynamic>.from(row); _loading = false; });
+    } catch (e) {
+      if (mounted) setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  Future<void> _openFile(String key, String label) async {
+    try {
+      final url = await Supabase.instance.client.storage
+          .from('revive-photos')
+          .createSignedUrl(key, 3600);
+      final messenger = ScaffoldMessenger.of(context);
+      final launched = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      if (!launched && context.mounted) {
+        await Clipboard.setData(ClipboardData(text: url));
+        messenger.showSnackBar(const SnackBar(content: Text('URL disalin ke clipboard')));
       }
     } catch (e) {
-      failure = e.toString();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(mapRawErrorToUserMessage(e)), backgroundColor: _red));
+      }
     }
-    if (!mounted) return;
-    if (failure != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Approval failed: $failure'),
-        backgroundColor: _red,
-        duration: const Duration(seconds: 6),
-      ));
-      return;
-    }
-    ref.invalidate(_pendingApplicationsProvider);
-    ref.invalidate(_partnerListProvider);
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text('Application approved — partner invited.'),
-      backgroundColor: _green,
-    ));
   }
 
   Future<String?> _showReasonDialog({
@@ -333,8 +739,7 @@ class _AdminPartnerAssessmentScreenState
       builder: (ctx) {
         final cs = Theme.of(ctx).colorScheme;
         return AlertDialog(
-          title: Text(title,
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: cs.onSurface)),
+          title: Text(title, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: cs.onSurface)),
           content: SizedBox(
             width: 420,
             child: Column(mainAxisSize: MainAxisSize.min,
@@ -368,8 +773,7 @@ class _AdminPartnerAssessmentScreenState
                 if (ctrl.text.trim().isEmpty) return;
                 Navigator.pop(ctx, ctrl.text.trim());
               },
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: actionColor, foregroundColor: Colors.white),
+              style: ElevatedButton.styleFrom(backgroundColor: actionColor, foregroundColor: Colors.white),
               child: Text(actionLabel),
             ),
           ],
@@ -380,7 +784,26 @@ class _AdminPartnerAssessmentScreenState
     return result;
   }
 
-  Future<void> _rejectApplication(String applicationId) async {
+  Future<void> _approve() async {
+    setState(() => _isSaving = true);
+    try {
+      final res = await Supabase.instance.client.functions
+          .invoke('approve-partner', body: {'applicationId': widget.applicationId});
+      if ((res.data as Map?)?['error'] != null) throw Exception(res.data['error']);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Pendaftaran disetujui — mitra diundang.'),
+            backgroundColor: _green));
+        widget.onActionDone();
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(mapRawErrorToUserMessage(e)), backgroundColor: _red));
+    }
+    if (mounted) setState(() => _isSaving = false);
+  }
+
+  Future<void> _reject() async {
     final reason = await _showReasonDialog(
       title: 'Tolak Pendaftaran',
       hint: 'Jelaskan alasan penolakan kepada mitra…',
@@ -388,32 +811,25 @@ class _AdminPartnerAssessmentScreenState
       actionColor: _red,
     );
     if (reason == null || !mounted) return;
-    String? failure;
+    setState(() => _isSaving = true);
     try {
       final res = await Supabase.instance.client.functions.invoke(
-        'reject-partner',
-        body: {'applicationId': applicationId, 'reason': reason},
-      );
-      if (res.status != 200) {
-        failure = (res.data is Map ? res.data['error']?.toString() : null) ?? 'HTTP \${res.status}';
+          'reject-partner', body: {'applicationId': widget.applicationId, 'reason': reason});
+      if ((res.data as Map?)?['error'] != null) throw Exception(res.data['error']);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Pendaftaran ditolak — mitra dinotifikasi.'),
+            backgroundColor: _red));
+        widget.onActionDone();
       }
     } catch (e) {
-      failure = e.toString();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(mapRawErrorToUserMessage(e)), backgroundColor: _red));
     }
-    if (!mounted) return;
-    ref.invalidate(_pendingApplicationsProvider);
-    if (failure != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Gagal menolak: \$failure'),
-          backgroundColor: _red, duration: const Duration(seconds: 6)));
-      return;
-    }
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Pendaftaran ditolak — mitra dinotifikasi.'),
-        backgroundColor: _red));
+    if (mounted) setState(() => _isSaving = false);
   }
 
-  Future<void> _requestRevision(String applicationId) async {
+  Future<void> _requestRevision() async {
     final notes = await _showReasonDialog(
       title: 'Minta Revisi',
       hint: 'Dokumen X belum lengkap, foto Y kurang jelas…',
@@ -421,247 +837,305 @@ class _AdminPartnerAssessmentScreenState
       actionColor: _amber,
     );
     if (notes == null || !mounted) return;
-    String? failure;
+    setState(() => _isSaving = true);
     try {
       final res = await Supabase.instance.client.functions.invoke(
-        'request-revision-partner',
-        body: {'applicationId': applicationId, 'notes': notes},
-      );
-      if (res.status != 200) {
-        failure = (res.data is Map ? res.data['error']?.toString() : null) ?? 'HTTP \${res.status}';
+          'request-revision-partner',
+          body: {'applicationId': widget.applicationId, 'notes': notes});
+      if ((res.data as Map?)?['error'] != null) throw Exception(res.data['error']);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Permintaan revisi terkirim.'),
+            backgroundColor: _amber));
+        widget.onActionDone();
       }
     } catch (e) {
-      failure = e.toString();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(mapRawErrorToUserMessage(e)), backgroundColor: _red));
     }
-    if (!mounted) return;
-    ref.invalidate(_pendingApplicationsProvider);
-    if (failure != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Gagal: \$failure'),
-          backgroundColor: _red, duration: const Duration(seconds: 6)));
-      return;
-    }
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Permintaan revisi terkirim ke mitra via WhatsApp & email.'),
-        backgroundColor: _amber));
+    if (mounted) setState(() => _isSaving = false);
   }
 
-  /// Opens one uploaded file. The bucket is private, so a signed URL is minted
-  /// on demand and handed to the OS browser/viewer.
-  Future<void> _openEvidence(String fileKey, String label) async {
-    try {
-      final url = await Supabase.instance.client.storage
-          .from(_bucket)
-          .createSignedUrl(fileKey, 3600);
-      final ok = await launchUrl(Uri.parse(url),
-          mode: LaunchMode.externalApplication);
-      if (!ok && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Could not open $label')));
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(mapRawErrorToUserMessage(e))));
+  @override
+  Widget build(BuildContext context) {
+    final cs = widget.cs;
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_error != null) return Center(child: Text('Error: $_error', style: TextStyle(color: cs.error)));
+    final app = _app!;
+
+    final shop = app['shop_name']?.toString() ?? 'Unnamed';
+    final entity = app['entity_name']?.toString() ?? '';
+    final status = app['status']?.toString() ?? 'pending';
+    final tier = (app['tier'] as num?)?.toInt() ?? 0;
+
+    final docs = <String, String>{};
+    for (final e in {'NIB': 'nib_file_key', 'NPWP': 'npwp_file_key',
+        'SIUP': 'siup_file_key', 'KTP': 'ktp_file_key'}.entries) {
+      if (app[e.value] != null) docs[e.key] = app[e.value].toString();
     }
-  }
-
-  Widget _buildPendingApplications(ColorScheme cs) {
-    final appsAsync = ref.watch(_pendingApplicationsProvider);
-    return appsAsync.when(
-      loading: () => const Padding(
-        padding: EdgeInsets.all(12),
-        child: SizedBox(
-            height: 18,
-            width: 18,
-            child: CircularProgressIndicator(strokeWidth: 2)),
-      ),
-      error: (e, _) => Padding(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-        child: Text('Applications unavailable: $e',
-            style: TextStyle(fontSize: 11, color: cs.error)),
-      ),
-      data: (apps) {
-        if (apps.isEmpty) return const SizedBox.shrink();
-        return Column(children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-            child: Row(children: [
-              const Icon(Icons.inbox_outlined, size: 16, color: _amber),
-              const SizedBox(width: 6),
-              Text('Pending Applications',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: cs.onSurface)),
-              const Spacer(),
-              _Badge('${apps.length}',
-                  _amber.withValues(alpha: 0.15), _amber),
-            ]),
-          ),
-          for (final a in apps) _buildApplicationRow(cs, a),
-          const SizedBox(height: 4),
-        ]);
-      },
-    );
-  }
-
-  Widget _buildApplicationRow(ColorScheme cs, Map<String, dynamic> a) {
-    final id = a['id']?.toString() ?? '';
-    final shop = a['shop_name']?.toString() ?? 'Unnamed Workshop';
-    final entity = a['entity_name']?.toString() ?? '';
-    final owner = a['owner_name']?.toString() ?? '';
-    final email = a['email']?.toString() ?? '';
-    final tier = (a['tier'] as num?)?.toInt() ?? 0;
-    final brand = a['paint_brand']?.toString() ?? '';
-    final capacity = (a['throughput_capacity'] as num?)?.toInt();
-    final radius = (a['service_radius_km'] as num?)?.toInt();
-    final docs = _docKeyColumns.entries
-        .where((e) => a[e.value] != null)
-        .map((e) => MapEntry(e.key, a[e.value] as String))
-        .toList();
-    final photos = (a['facility_photo_keys'] as List?)
+    final photos = (app['facility_photo_keys'] as List?)
             ?.whereType<Map>()
             .map((m) => Map<String, dynamic>.from(m))
             .where((m) => m['file_key'] != null)
             .toList() ??
-        const <Map<String, dynamic>>[];
-    final submitted = DateTime.tryParse(
-        (a['submitted_at'] ?? a['created_at'])?.toString() ?? '');
+        [];
 
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: _amber.withValues(alpha: 0.06),
-        border: Border.all(color: _amber.withValues(alpha: 0.35)),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Expanded(
-            child: Text(shop,
-                style: TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w700, color: cs.onSurface),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis),
-          ),
-          if (tier > 0) _Badge('T$tier', cs.surfaceContainerHigh, cs.onSurface),
-        ]),
-        if (entity.isNotEmpty) ...[
-          const SizedBox(height: 2),
-          Text(entity,
-              style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis),
-        ],
-        const SizedBox(height: 2),
-        Text('$owner · $email',
-            style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis),
-        if (brand.isNotEmpty || capacity != null || radius != null) ...[
-          const SizedBox(height: 4),
-          Text([
-            if (brand.isNotEmpty) brand.toUpperCase(),
-            if (capacity != null) '$capacity panels/mo',
-            if (radius != null) '$radius km radius',
-          ].join(' · '),
-              style: TextStyle(fontSize: 10, color: cs.onSurfaceVariant)),
-        ],
-        if (submitted != null) ...[
-          const SizedBox(height: 2),
-          Text('Submitted ${DateFormat('d MMM yyyy, HH:mm').format(submitted.toLocal())}',
-              style: TextStyle(fontSize: 10, color: cs.onSurfaceVariant)),
-        ],
-
-        // ── Evidence the applicant uploaded ────────────────────────────────
-        const SizedBox(height: 8),
-        Row(children: [
-          _Badge('${docs.length}/4 docs',
-              docs.length == 4
-                  ? _green.withValues(alpha: 0.15)
-                  : _amber.withValues(alpha: 0.15),
-              docs.length == 4 ? _green : _amber),
-          const SizedBox(width: 4),
-          _Badge('${photos.length}/4 photos',
-              photos.length == 4
-                  ? _green.withValues(alpha: 0.15)
-                  : _amber.withValues(alpha: 0.15),
-              photos.length == 4 ? _green : _amber),
-        ]),
-        if (docs.isNotEmpty || photos.isNotEmpty) ...[
-          const SizedBox(height: 6),
-          Wrap(spacing: 6, runSpacing: 4, children: [
-            for (final d in docs)
-              _EvidenceChip(
-                label: d.key,
-                onTap: () => _openEvidence(d.value, d.key),
-              ),
-            for (final p in photos)
-              _EvidenceChip(
-                label: (p['label']?.toString().isNotEmpty ?? false)
-                    ? p['label'].toString()
-                    : 'Photo ${(p['slot'] as num?)?.toInt() ?? 0}',
-                onTap: () => _openEvidence(
-                    p['file_key'].toString(), p['label']?.toString() ?? 'photo'),
-              ),
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // ── Header ───────────────────────────────────────────────────────────
+      Container(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+        decoration: BoxDecoration(
+          color: cs.surfaceContainerLow,
+          border: Border(bottom: BorderSide(color: cs.outlineVariant)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(
+              width: 48, height: 48,
+              decoration: BoxDecoration(
+                  color: _amber.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.inbox_outlined, color: _amber, size: 24),
+            ),
+            const SizedBox(width: 14),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(shop, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: cs.onSurface)),
+              Text(entity, style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+              const SizedBox(height: 6),
+              Row(children: [
+                _StatusChip(status),
+                const SizedBox(width: 8),
+                if (tier > 0) _Badge('Tier $tier', cs.surfaceContainerHigh, cs.onSurface),
+                const SizedBox(width: 8),
+                _Badge('Pendaftaran Baru', _amber.withValues(alpha: 0.12), _amber),
+              ]),
+            ])),
+            // Action buttons
+            _isSaving
+                ? const SizedBox(width: 20, height: 20,
+                    child: CircularProgressIndicator(color: _amber, strokeWidth: 2))
+                : Wrap(spacing: 8, children: [
+                    ElevatedButton.icon(
+                      onPressed: _approve,
+                      icon: const Icon(Icons.check_circle_outline, size: 16),
+                      label: const Text('Setujui'),
+                      style: ElevatedButton.styleFrom(
+                          backgroundColor: _green, foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8)),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _requestRevision,
+                      icon: const Icon(Icons.edit_note_outlined, size: 16),
+                      label: const Text('Revisi'),
+                      style: OutlinedButton.styleFrom(
+                          foregroundColor: _amber, side: const BorderSide(color: _amber),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8)),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _reject,
+                      icon: const Icon(Icons.cancel_outlined, size: 16),
+                      label: const Text('Tolak'),
+                      style: OutlinedButton.styleFrom(
+                          foregroundColor: _red, side: const BorderSide(color: _red),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8)),
+                    ),
+                  ]),
           ]),
-        ],
-
-        const SizedBox(height: 8),
-        Row(children: [
-          Expanded(
-            child: OutlinedButton(
-              onPressed: () => _rejectApplication(id),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: _red,
-                side: const BorderSide(color: _red),
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-              ),
-              child: const Text('Tolak', style: TextStyle(fontSize: 11)),
-            ),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: OutlinedButton(
-              onPressed: () => _requestRevision(id),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: _amber,
-                side: const BorderSide(color: _amber),
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-              ),
-              child: const Text('Revisi', style: TextStyle(fontSize: 11)),
-            ),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: ElevatedButton(
-              onPressed: () => _approveApplication(id),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _green,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-              ),
-              child: const Text('Setujui', style: TextStyle(fontSize: 11)),
-            ),
+          const SizedBox(height: 12),
+          TabBar(
+            controller: _tabs,
+            isScrollable: true,
+            labelColor: _amber,
+            unselectedLabelColor: cs.onSurfaceVariant,
+            indicatorColor: _amber,
+            indicatorWeight: 2,
+            tabs: const [Tab(text: 'Detail'), Tab(text: 'Dokumen'), Tab(text: 'Foto Fasilitas')],
           ),
         ]),
-      ]),
-    );
+      ),
+
+      // ── Tab content ───────────────────────────────────────────────────────
+      Expanded(
+        child: TabBarView(controller: _tabs, children: [
+          // ── Tab 0: Details ───────────────────────────────────────────────
+          SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Wrap(spacing: 16, runSpacing: 12, children: [
+              _InfoCard('Identitas Bisnis', [
+                ('Nama Entitas Hukum', app['entity_name']),
+                ('Nama Workshop', app['shop_name']),
+                ('PIC / Manajer', app['owner_name']),
+                ('Email', app['email']),
+                ('WhatsApp', app['phone']),
+                ('Alamat Hukum', app['address']),
+                ('Alamat Workshop', app['workshop_address'] ?? app['address']),
+              ], cs),
+              _InfoCard('Kapasitas & Operasional', [
+                ('Tier', 'Tier ${app['tier'] ?? '—'}'),
+                ('Merek Cat', app['paint_brand']),
+                ('Kapasitas Harian', '${app['throughput_capacity'] ?? '—'} panel/hari'),
+                ('Radius Layanan', '${app['service_radius_km'] ?? '—'} km'),
+              ], cs),
+              _InfoCard('Rekening Payout', [
+                ('Bank', app['bank_name']),
+                ('Nomor Rekening', app['bank_account_number']),
+                ('Nama Pemilik', app['bank_account_holder']),
+              ], cs),
+              _InfoCard('Lokasi GPS', [
+                ('Latitude', app['latitude']?.toString()),
+                ('Longitude', app['longitude']?.toString()),
+                ('WA Terverifikasi', app['wa_verified'] == true ? 'Ya ✓' : 'Belum'),
+              ], cs),
+              _InfoCard('Status Pendaftaran', [
+                ('Status', app['status']),
+                ('Dikirim', _fmtDate(app['submitted_at']?.toString())),
+                ('Catatan Revisi', app['revision_notes']),
+                ('Alasan Tolak', app['rejection_reason']),
+              ], cs),
+            ]),
+          ),
+
+          // ── Tab 1: Documents ─────────────────────────────────────────────
+          SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Dokumen legal yang diunggah oleh pelamar.',
+                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+              const SizedBox(height: 16),
+              for (final entry in {'NIB — Nomor Induk Berusaha': 'nib_file_key',
+                  'NPWP Badan Usaha': 'npwp_file_key',
+                  'SIUP — Izin Operasional': 'siup_file_key',
+                  'KTP Direktur / PIC': 'ktp_file_key'}.entries) ...[
+                _AppDocRow(
+                  cs: cs,
+                  label: entry.key,
+                  fileKey: app[entry.value]?.toString(),
+                  onOpen: app[entry.value] != null
+                      ? () => _openFile(app[entry.value].toString(), entry.key)
+                      : null,
+                ),
+                const SizedBox(height: 10),
+              ],
+            ]),
+          ),
+
+          // ── Tab 2: Facility Photos ────────────────────────────────────────
+          SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: photos.isEmpty
+                ? Center(child: Text('Tidak ada foto diunggah.',
+                    style: TextStyle(color: cs.onSurfaceVariant)))
+                : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('${photos.length}/4 foto fasilitas diunggah.',
+                        style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                    const SizedBox(height: 16),
+                    GridView.count(
+                      crossAxisCount: 2,
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      mainAxisSpacing: 12, crossAxisSpacing: 12,
+                      childAspectRatio: 1.5,
+                      children: photos.map((p) {
+                        final key = p['file_key'].toString();
+                        final label = p['label']?.toString() ??
+                            'Slot ${p['slot'] ?? ''}';
+                        return GestureDetector(
+                          onTap: () => _openFile(key, label),
+                          child: Stack(children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: SignedImage(
+                                fileKey: key,
+                                fit: BoxFit.cover,
+                                width: double.infinity,
+                                height: double.infinity,
+                                errorWidget: Container(
+                                  color: cs.surfaceContainerHighest,
+                                  child: Icon(Icons.broken_image_outlined,
+                                      color: cs.onSurfaceVariant, size: 32)),
+                              ),
+                            ),
+                            Positioned(bottom: 0, left: 0, right: 0,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.55),
+                                  borderRadius: const BorderRadius.only(
+                                    bottomLeft: Radius.circular(8),
+                                    bottomRight: Radius.circular(8)),
+                                ),
+                                child: Row(children: [
+                                  Expanded(child: Text(label,
+                                      style: const TextStyle(fontSize: 10, color: Colors.white))),
+                                  const Icon(Icons.open_in_new, size: 12, color: Colors.white70),
+                                ]),
+                              ),
+                            ),
+                          ]),
+                        );
+                      }).toList(),
+                    ),
+                  ]),
+          ),
+        ]),
+      ),
+    ]);
   }
 
+  String _fmtDate(String? dt) {
+    if (dt == null) return '—';
+    try {
+      return DateFormat('d MMM yyyy, HH:mm').format(DateTime.parse(dt).toLocal());
+    } catch (_) { return dt; }
+  }
+}
 
-  Color _statusColor(String status) {
-    switch (status) {
-      case 'approved': return _green;
-      case 'rejected': return _red;
-      case 'pending':  return _amber;
-      default:         return _blue;
-    }
+// ── Doc row for application detail ───────────────────────────────────────────
+class _AppDocRow extends StatelessWidget {
+  final ColorScheme cs;
+  final String label;
+  final String? fileKey;
+  final VoidCallback? onOpen;
+  const _AppDocRow({required this.cs, required this.label, this.fileKey, this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    final has = fileKey != null;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainer,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+            color: has ? _green.withValues(alpha: 0.4) : cs.outlineVariant.withValues(alpha: 0.3)),
+      ),
+      child: Row(children: [
+        Container(
+          width: 36, height: 36,
+          decoration: BoxDecoration(
+            color: has ? _green.withValues(alpha: 0.1) : cs.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(has ? Icons.check_circle_outline : Icons.upload_file_outlined,
+              color: has ? _green : cs.onSurfaceVariant, size: 20),
+        ),
+        const SizedBox(width: 14),
+        Expanded(child: Text(label,
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: cs.onSurface))),
+        if (has)
+          OutlinedButton.icon(
+            onPressed: onOpen,
+            icon: const Icon(Icons.open_in_new, size: 14),
+            label: const Text('Buka', style: TextStyle(fontSize: 11)),
+            style: OutlinedButton.styleFrom(
+                foregroundColor: _blue,
+                side: BorderSide(color: _blue.withValues(alpha: 0.4)),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6)),
+          )
+        else
+          Text('Tidak diunggah', style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+      ]),
+    );
   }
 }
 
@@ -920,7 +1394,7 @@ class _PartnerDetailPanelState extends ConsumerState<_PartnerDetailPanel>
   @override
   Widget build(BuildContext context) {
     final cs = widget.cs;
-    final listAsync = ref.watch(_partnerListProvider);
+    final listAsync = ref.watch(_partnersProvider((0, 'all', '')));
 
     return listAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
