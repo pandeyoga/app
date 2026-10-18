@@ -277,6 +277,7 @@ Return precise counts for dents, scratches, and broken panels in the exact follo
 
     let estimationResult = null;
     let usedModel = "";
+    let usedEngineId = -1;
     let lastError = null;
 
     // Execute Fallback Cascade
@@ -303,6 +304,7 @@ Return precise counts for dents, scratches, and broken panels in the exact follo
         }
         
         usedModel = `${configData.provider}/${configData.model_name}`;
+        usedEngineId = configData.priority_order;
         break; // Success! Break the fallback loop
       } catch (err: any) {
         console.error(`Model ${configData.model_name} failed:`, err.message);
@@ -354,7 +356,8 @@ Return precise counts for dents, scratches, and broken panels in the exact follo
         success: true,
         estimation: estimationResult,
         structuredData: finalCostEstimation,
-        usedModel: usedModel
+        usedModel: usedModel,
+        engineId: usedEngineId,
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
       status: 200,

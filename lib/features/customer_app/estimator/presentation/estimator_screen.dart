@@ -63,6 +63,7 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
   String? _aiResult;
   Map<String, dynamic>? _structuredData;
   String? _estimationId;
+  int? _engineId;
 
   @override
   void initState() {
@@ -176,6 +177,7 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
         _aiResult = res.data['estimation'] ?? 'AI categorization complete.';
         _structuredData = res.data['structuredData'];
         _estimationId = res.data['estimationId']?.toString();
+        _engineId = res.data['engineId'] as int?;
         if (_structuredData != null) {
           final cost = _structuredData!['financial_estimation']?['calculated_base_cost'] ?? 0;
           ref.read(customerIntakeProvider.notifier).updateEstimatedCost((cost as num).toDouble());
@@ -928,13 +930,27 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
                     ),
                   ],
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: (isDark ? AppColors.surfaceContainer : Theme.of(context).colorScheme.surfaceContainer),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text('${panels.length} Items', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.fireRed)),
+                Row(
+                  children: [
+                    if (_engineId != null)
+                      Container(
+                        margin: const EdgeInsets.only(right: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: (isDark ? AppColors.surfaceContainer : Theme.of(context).colorScheme.surfaceContainer),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text('E$_engineId', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: (isDark ? AppColors.onSurfaceVariant : Theme.of(context).colorScheme.onSurfaceVariant))),
+                      ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: (isDark ? AppColors.surfaceContainer : Theme.of(context).colorScheme.surfaceContainer),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text('${panels.length} Items', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.fireRed)),
+                    ),
+                  ],
                 ),
               ],
             ),

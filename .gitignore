@@ -90,3 +90,6 @@ car_blueprint.png
 
 # Deprecated code archive
 _deprecated/
+
+# Graphify
+graphify-out/
