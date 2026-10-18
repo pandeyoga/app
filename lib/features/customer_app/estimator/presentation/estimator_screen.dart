@@ -177,7 +177,7 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
         _aiResult = res.data['estimation'] ?? 'AI categorization complete.';
         _structuredData = res.data['structuredData'];
         _estimationId = res.data['estimationId']?.toString();
-        _engineId = res.data['engineId'] as int?;
+        _engineId = res.data['engineId'] != null ? (res.data['engineId'] as num).toInt() : null;
         if (_structuredData != null) {
           final cost = _structuredData!['financial_estimation']?['calculated_base_cost'] ?? 0;
           ref.read(customerIntakeProvider.notifier).updateEstimatedCost((cost as num).toDouble());

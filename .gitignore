@@ -93,3 +93,4 @@ _deprecated/
 
 # Graphify
 graphify-out/
+node_modules/
