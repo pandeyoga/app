@@ -271,7 +271,7 @@ Valid panel names are: Bumper Depan, Spoiler Bumper depan, Kap Mesin, Bumper Bel
 
 For each damaged panel found, classify its specific severity into: 'ringan', 'sedang', or 'berat'.
 Also classify the overall severity of the car damage.
-Return precise counts for dents, scratches, and broken panels in the exact following JSON format:
+Return precise counts for dents, scratches, and broken panels in EXACTLY this JSON format. Do NOT change field names. Do NOT add extra fields. Do NOT wrap in markdown. Output raw JSON only:
 {
   "analysis_metadata": { "engine_processed": "model-name", "timestamp": "ISO8601" },
   "assessment": {
@@ -282,7 +282,8 @@ Return precise counts for dents, scratches, and broken panels in the exact follo
     ]
   },
   "financial_estimation": { "currency": "IDR", "estimated_days_to_repair": 0 }
-}`;
+}
+CRITICAL: The field name MUST be "panel_name" (not "panel", not "name"). The severity field MUST be "panel_severity" (not "severity"). Only use values "ringan", "sedang", or "berat" for severity — NOT "mild", "moderate", or "severe".`;
 
     let estimationResult = null;
     let usedModel = "";
@@ -349,12 +350,13 @@ Return precise counts for dents, scratches, and broken panels in the exact follo
           const panels = finalCostEstimation.damaged_panels_detail.map((p: any) => {
             console.log('[vision-estimation] raw panel keys:', Object.keys(p).join(','), 'panel_name:', p.panel_name, 'severity:', p.severity, 'damage_type:', p.damage_type);
             return {
-            panel_name: p.panel_name,
+            panel_name: p.panel_name ?? p.panel ?? p.name ?? null,
             panel_severity: p.severity === 'severe' ? 'berat' : p.severity === 'moderate' ? 'sedang' : p.severity === 'mild' ? 'ringan' : p.panel_severity ?? 'berat',
             scratches_found: p.scratches_found ?? (p.damage_type === 'scratch' ? 1 : 0),
             dents_found: p.dents_found ?? (p.damage_type === 'dent' ? 1 : 0),
             broken_found: p.broken_found ?? (p.damage_type === 'broken' ? 1 : 0),
             requires_replacement: p.requires_replacement ?? (p.damage_type === 'broken'),
+            _no_damage_type: !p.damage_type && !p.scratches_found && !p.dents_found && !p.broken_found,
             }; // close return
           }); // close map
           finalCostEstimation = {
