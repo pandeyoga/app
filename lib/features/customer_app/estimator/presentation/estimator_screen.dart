@@ -996,7 +996,11 @@ class _EstimatorScreenState extends ConsumerState<EstimatorScreen> {
                                     Text(' • ', style: TextStyle(fontSize: 12, color: (isDark ? AppColors.onSurfaceVariant : Theme.of(context).colorScheme.onSurfaceVariant))),
                                   if ((panel['dents_found'] as num? ?? 0) > 0)
                                     Text('🔨 Penyok', style: TextStyle(fontSize: 12, color: Colors.blue[700], fontWeight: FontWeight.bold)),
-                                  if ((panel['scratches_found'] as num? ?? 0) == 0 && (panel['dents_found'] as num? ?? 0) == 0)
+                                  if ((panel['dents_found'] as num? ?? 0) > 0 && (panel['broken_found'] as num? ?? 0) > 0)
+                                    Text(' • ', style: TextStyle(fontSize: 12, color: (isDark ? AppColors.onSurfaceVariant : Theme.of(context).colorScheme.onSurfaceVariant))),
+                                  if ((panel['broken_found'] as num? ?? 0) > 0)
+                                    Text('💥 Pecah/Ringsek', style: TextStyle(fontSize: 12, color: Colors.red[700], fontWeight: FontWeight.bold)),
+                                  if ((panel['scratches_found'] as num? ?? 0) == 0 && (panel['dents_found'] as num? ?? 0) == 0 && (panel['broken_found'] as num? ?? 0) == 0)
                                     Text('Kerusakan Umum', style: TextStyle(fontSize: 12, color: (isDark ? AppColors.onSurfaceVariant : Theme.of(context).colorScheme.onSurfaceVariant))),
                                 ],
                               ),

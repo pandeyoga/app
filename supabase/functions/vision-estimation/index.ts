@@ -159,6 +159,15 @@ function calculateDeterministicCost(
     panel.calculated_cost = panelCost;
     panel.applied_multiplier = multiplier;
     totalCost += panelCost;
+    // Propagate cost back to the original panel object in structuredData
+    const origPanel = structuredData.assessment.damaged_panels_detail.find(
+      (p: any) => (p.panel_name ?? '').trim().toLowerCase() === normName
+    );
+    if (origPanel) {
+      origPanel.calculated_cost = panelCost;
+      origPanel.applied_multiplier = multiplier;
+      origPanel.panel_severity = severity;
+    }
   }
   return totalCost;
 }
@@ -321,7 +330,7 @@ Return precise counts for dents, scratches, and broken panels in the exact follo
     try {
         let jsonStr = estimationResult;
         // Try to extract from markdown code blocks first
-        const mdMatch = estimationResult.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        const mdMatch = estimationResult.match(/```(?:json)?\s*([\s\S]+?)\s*```/) ?? estimationResult.match(/```(?:json)?\s*([\s\S]+)/);
         if (mdMatch) {
             jsonStr = mdMatch[1];
         } else {
@@ -334,6 +343,30 @@ Return precise counts for dents, scratches, and broken panels in the exact follo
         }
         
         finalCostEstimation = JSON.parse(jsonStr);
+        console.log('[vision-estimation] parsed keys:', Object.keys(finalCostEstimation).join(','));
+        // Normalise: if model returned damaged_panels_detail at root (no assessment wrapper), wrap it
+        if (!finalCostEstimation.assessment && finalCostEstimation.damaged_panels_detail) {
+          const panels = finalCostEstimation.damaged_panels_detail.map((p: any) => {
+            console.log('[vision-estimation] raw panel keys:', Object.keys(p).join(','), 'panel_name:', p.panel_name, 'severity:', p.severity, 'damage_type:', p.damage_type);
+            return {
+            panel_name: p.panel_name,
+            panel_severity: p.severity === 'severe' ? 'berat' : p.severity === 'moderate' ? 'sedang' : p.severity === 'mild' ? 'ringan' : p.panel_severity ?? 'berat',
+            scratches_found: p.scratches_found ?? (p.damage_type === 'scratch' ? 1 : 0),
+            dents_found: p.dents_found ?? (p.damage_type === 'dent' ? 1 : 0),
+            broken_found: p.broken_found ?? (p.damage_type === 'broken' ? 1 : 0),
+            requires_replacement: p.requires_replacement ?? (p.damage_type === 'broken'),
+            }; // close return
+          }); // close map
+          finalCostEstimation = {
+            analysis_metadata: finalCostEstimation.analysis_metadata ?? {},
+            assessment: {
+              severity_classification: finalCostEstimation.summary?.overall_severity ?? 'sedang',
+              total_panels_damaged: panels.length,
+              damaged_panels_detail: panels,
+            },
+            financial_estimation: finalCostEstimation.financial_estimation ?? {},
+          };
+        }
         const calculatedCost = calculateDeterministicCost(finalCostEstimation, liveRules);
         finalCostEstimation.financial_estimation = finalCostEstimation.financial_estimation || {};
         finalCostEstimation.financial_estimation.calculated_base_cost = calculatedCost;
