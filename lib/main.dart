@@ -60,8 +60,7 @@ class ReVApp extends ConsumerWidget {
     final currentThemeMode = ref.watch(themeModeProvider);
     final currentLocale = ref.watch(localeProvider);
 
-    return SelectionArea(
-      child: MaterialApp.router(
+    return MaterialApp.router(
       title: 're-V.co.id | Automotive Body Repair Portal',
       debugShowCheckedModeBanner: false,
 
@@ -87,7 +86,15 @@ class ReVApp extends ConsumerWidget {
 
       // Hook Flutter directly into our GoRouter instance
       routerConfig: router,
-    ),   // MaterialApp.router
-    );   // SelectionArea
+
+      // Text selection on every page. SelectionArea needs the
+      // MaterialLocalizations that MaterialApp provides, so it sits inside
+      // the app here instead of wrapping it (that threw in debug mode). It
+      // also needs an Overlay ancestor for its handles and context menu, and
+      // the Navigator's Overlay is below this point, so it brings its own.
+      builder: (context, child) => Overlay.wrap(
+        child: SelectionArea(child: child!),
+      ),
+    );
   }
 }
